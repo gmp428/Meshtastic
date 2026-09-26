@@ -19,6 +19,7 @@ enum MeshtasticBLEError: Error, Equatable {
     case notConnected
     case serviceNotFound
     case protobufNotIntegrated(String)
+    case adminFailed(String)
     case invalidPSKLength
     case cancelled
 }
@@ -40,6 +41,8 @@ extension MeshtasticBLEError: LocalizedError {
             return "The Meshtastic Bluetooth service was not found on this radio."
         case .protobufNotIntegrated(let step):
             return "\(step) needs Meshtastic protobuf admin messages. This build will not pretend that write succeeded."
+        case .adminFailed(let message):
+            return message
         case .invalidPSKLength:
             return "The fleet PSK must be 32 bytes before a channel write."
         case .cancelled:

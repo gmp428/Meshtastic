@@ -3,18 +3,18 @@ import Foundation
 
 /// CoreBluetooth central for the Meshtastic PhoneAPI service.
 ///
-/// Scan, connect, and GATT discovery are real. Mutating admin (`wantConfigID`,
-/// `set_config`, `set_channel`, read-back) is not encoded yet, so those methods throw
-/// `MeshtasticBLEError.protobufNotIntegrated` instead of reporting a fake success.
+/// Scan and GATT are real. Handshake, `set_config`, channel send, and read-back use
+/// `PhoneAPICodec` (ToRadio / FromRadio / AdminMessage). The DEBUG simulated transport
+/// is a separate type and does not use this class.
 ///
 /// Service and characteristic UUIDs match the public Meshtastic client API:
 /// https://meshtastic.org/docs/development/device/client-api/
 @MainActor
 final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
-    static let serviceUUID = CBUUID(string: "6BA1B218-15A8-461F-9FA8-5DCAE273EAFD")
-    static let toRadioUUID = CBUUID(string: "F75C76D2-129E-4DAD-A1DD-7866124401E7")
-    static let fromRadioUUID = CBUUID(string: "2C55E69E-4993-11ED-B878-0242AC120002")
-    static let fromNumUUID = CBUUID(string: "ED9DA18C-A800-4F66-A670-AA7547E34453")
+    nonisolated static let serviceUUID = CBUUID(string: "6BA1B218-15A8-461F-9FA8-5DCAE273EAFD")
+    nonisolated static let toRadioUUID = CBUUID(string: "F75C76D2-129E-4DAD-A1DD-7866124401E7")
+    nonisolated static let fromRadioUUID = CBUUID(string: "2C55E69E-4993-11ED-B878-0242AC120002")
+    nonisolated static let fromNumUUID = CBUUID(string: "ED9DA18C-A800-4F66-A670-AA7547E34453")
 
     var onDiscovered: (@MainActor (DiscoveredRadio) -> Void)?
     var onBluetoothBlocked: (@MainActor (String?) -> Void)?
@@ -32,6 +32,23 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
     private var connectTimeout: Task<Void, Never>?
     private var linkDropContinuation: CheckedContinuation<Bool, Never>?
     private var expectingLinkDrop = false
+    private var readContinuation: CheckedContinuation<Data, Error>?
+    private var writeContinuation: CheckedContinuation<Void, Error>?
+    private var fromNumWaiters: [CheckedContinuation<Void, Never>] = []
+    private var notifyWaiters: [CheckedContinuation<Void, Never>] = []
+    private var pendingReads: [Data] = []
+    private var fromNumPending = false
+    private var fromNumNotifyReady = false
+    private var sawLinkDrop = false
+    private var adminExpectsReboot = false
+    private var lastNotice: String?
+    private var packetCounter = UInt32.random(in: 1...0x00FF_FFFF)
+    private var sessionPasskey = Data()
+    private var nodeNum: UInt32?
+    private var loraConfig: Data?
+    private var deviceConfig: Data?
+    private var positionConfig: Data?
+    private var displayConfig: Data?
     private let gate = NSLock()
 
     func startScan() async {
@@ -98,54 +115,165 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
     }
 
     func handshake() async throws {
-        guard connectedPeripheral != nil,
-              toRadio != nil,
-              fromRadio != nil,
-              fromNum != nil else {
+        guard PhoneAPICodec.selfCheck() else {
+            throw MeshtasticBLEError.adminFailed(
+                "PhoneAPI encoder self-check failed. This build will not write to the radio."
+            )
+        }
+        guard connectedPeripheral != nil, toRadio != nil, fromRadio != nil, fromNum != nil else {
             throw MeshtasticBLEError.notConnected
         }
-        // GATT is up and FromNum notify was requested. Encoding ToRadio.want_config_id,
-        // draining FromRadio, and seeding session_passkey requires Meshtastic protobufs.
-        throw MeshtasticBLEError.protobufNotIntegrated(
-            "PhoneAPI handshake (wantConfig, FromRadio drain, session passkey)"
+        scrubSession()
+        sawLinkDrop = false
+        lastNotice = nil
+        await waitForNotifyReady()
+        try await discardQueuedPackets()
+        // 69420 asks current firmware for config and channels without the node database.
+        let nonce = PhoneAPICodec.configOnlyNonce
+        try await writeWithRetry(PhoneAPICodec.wantConfig(nonce: nonce))
+
+        let deadline = Date().addingTimeInterval(45)
+        var sawMyNode = false
+        var sawComplete = false
+        while Date() < deadline && !sawComplete {
+            if sawLinkDrop { throw MeshtasticBLEError.notConnected }
+            let frame = try await readNextFrame(until: deadline)
+            switch try PhoneAPICodec.classify(frame) {
+            case .myNode(let num) where num != 0:
+                nodeNum = num
+                sawMyNode = true
+            case .config(let slice):
+                store(slice)
+                sawMyNode = true
+            case .configComplete(let id) where id == nonce && sawMyNode:
+                sawComplete = true
+            case .notice(let text):
+                lastNotice = text
+            default:
+                break
+            }
+        }
+        guard sawComplete else {
+            throw MeshtasticBLEError.adminFailed(noticeSuffix("The radio did not finish sending its config."))
+        }
+        guard let nodeNum, nodeNum != 0 else {
+            throw MeshtasticBLEError.adminFailed("The radio did not report its node number.")
+        }
+        guard loraConfig != nil, deviceConfig != nil, positionConfig != nil, displayConfig != nil else {
+            throw MeshtasticBLEError.adminFailed(
+                "Handshake did not include LoRa, device, position, and display config. Mesh Config will not send a partial config."
+            )
+        }
+        _ = nodeNum
+        let owner = try await roundTrip(
+            admin: PhoneAPICodec.getOwnerAdmin(),
+            wantResponse: true,
+            wantBody: true,
+            linkDropSucceeds: false
         )
+        if let key = owner?.passkey, key.count == 8 {
+            adoptPasskey(key)
+        }
+        guard sessionPasskey.count == 8 else {
+            throw MeshtasticBLEError.adminFailed("The radio did not return an admin session passkey.")
+        }
     }
 
     func setLoRa(_ settings: LoRaSettings) async throws {
-        try requireLink()
-        _ = settings
-        throw MeshtasticBLEError.protobufNotIntegrated("LoRa set_config")
+        try await writeRebootingConfig {
+            guard let existing = self.loraConfig else {
+                throw MeshtasticBLEError.adminFailed(
+                    "Handshake did not include LoRa config, so Mesh Config will not overwrite the radio with a partial config."
+                )
+            }
+            let body = try PhoneAPICodec.loraConfig(merging: existing, settings: settings)
+            try await self.sendConfig(kind: .lora, body: body)
+        }
     }
 
     func setDevice(role: DeviceRole, settings: DeviceSettings) async throws {
-        try requireLink()
-        _ = (role, settings)
-        throw MeshtasticBLEError.protobufNotIntegrated("Device set_config")
+        try await writeRebootingConfig {
+            guard let existing = self.deviceConfig else {
+                throw MeshtasticBLEError.adminFailed(
+                    "Handshake did not include device config, so Mesh Config will not overwrite the radio with a partial config."
+                )
+            }
+            let body = try PhoneAPICodec.deviceConfig(merging: existing, role: role, settings: settings)
+            try await self.sendConfig(kind: .device, body: body)
+        }
     }
 
     func setPosition(_ settings: PositionSettings) async throws {
-        try requireLink()
-        _ = settings
-        throw MeshtasticBLEError.protobufNotIntegrated("Position set_config")
+        try await writeRebootingConfig {
+            guard let existing = self.positionConfig else {
+                throw MeshtasticBLEError.adminFailed(
+                    "Handshake did not include position config, so Mesh Config will not overwrite the radio with a partial config."
+                )
+            }
+            let body = try PhoneAPICodec.positionConfig(merging: existing, settings: settings)
+            try await self.sendConfig(kind: .position, body: body)
+        }
     }
 
     func setDisplay(_ settings: DisplaySettings) async throws {
-        try requireLink()
-        _ = settings
-        throw MeshtasticBLEError.protobufNotIntegrated("Display set_config")
+        try await writeRebootingConfig {
+            guard let existing = self.displayConfig else {
+                throw MeshtasticBLEError.adminFailed(
+                    "Handshake did not include display config, so Mesh Config will not overwrite the radio with a partial config."
+                )
+            }
+            let body = try PhoneAPICodec.displayConfig(merging: existing, settings: settings)
+            try await self.sendConfig(kind: .display, body: body)
+        }
     }
 
     func setPrimaryChannel(_ settings: ChannelSettings, psk: Data) async throws {
         try requireLink()
         guard psk.count == 32 else { throw MeshtasticBLEError.invalidPSKLength }
-        // Do not log or retain `psk`. Channel replace + Send is protobuf work.
-        _ = settings
-        throw MeshtasticBLEError.protobufNotIntegrated("Channel set + Send")
+        guard sessionPasskey.count == 8 else {
+            throw MeshtasticBLEError.adminFailed("The admin session is missing. Reconnect and try this radio again.")
+        }
+        let channelID = UInt32.random(in: 1...UInt32.max)
+        let channel: Data
+        do {
+            channel = try PhoneAPICodec.channelMessage(
+                name: settings.name,
+                psk: psk,
+                uplink: settings.uplinkEnabled,
+                downlink: settings.downlinkEnabled,
+                preciseLocation: settings.preciseLocation,
+                channelID: channelID
+            )
+        } catch PhoneAPICodec.CodecError.channelNameTooLong {
+            throw MeshtasticBLEError.adminFailed("The channel name must be shorter than 12 bytes.")
+        }
+        let admin = PhoneAPICodec.setChannelAdmin(channel: channel, passkey: sessionPasskey)
+        do {
+            // want_response asks AdminModule for a Routing NONE after the channel is saved.
+            // A want_ack by itself can be emitted before the admin module accepts the write.
+            _ = try await roundTrip(
+                admin: admin,
+                wantResponse: true,
+                wantBody: false,
+                linkDropSucceeds: false
+            )
+        } catch MeshtasticBLEError.notConnected {
+            throw MeshtasticBLEError.adminFailed("The radio dropped the Bluetooth link during the channel send.")
+        }
     }
 
     func readSnapshot() async throws -> DeviceSnapshot {
         try requireLink()
-        throw MeshtasticBLEError.protobufNotIntegrated("Config read-back")
+        let lora = try await fetchConfig(.lora)
+        let device = try await fetchConfig(.device)
+        let position = try await fetchConfig(.position)
+        let channel = try await fetchChannel()
+        return try PhoneAPICodec.snapshot(
+            lora: lora,
+            device: device,
+            position: position,
+            channel: channel
+        )
     }
 
     func disconnect() async {
@@ -153,18 +281,20 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         if let connectedPeripheral, let central {
             central.cancelPeripheralConnection(connectedPeripheral)
         }
-        connectedPeripheral = nil
-        toRadio = nil
-        fromRadio = nil
-        fromNum = nil
+        tearDownLink()
         resumeLinkDrop(true)
         resumeConnect(.failure(MeshtasticBLEError.cancelled))
+        failPendingIO(MeshtasticBLEError.cancelled)
     }
 
     func waitForLinkDrop(timeout: TimeInterval) async -> Bool {
+        if sawLinkDrop || connectedPeripheral == nil {
+            sawLinkDrop = false
+            return true
+        }
         expectingLinkDrop = true
         defer { expectingLinkDrop = false }
-        return await withTaskGroup(of: Bool.self) { group in
+        let dropped = await withTaskGroup(of: Bool.self) { group in
             group.addTask { @MainActor in
                 return await withCheckedContinuation { continuation in
                     self.storeLinkDropContinuation(continuation)
@@ -182,6 +312,413 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
             }
             return first
         }
+        sawLinkDrop = false
+        return dropped
+    }
+
+    // MARK: - Admin session
+
+    /// Current firmware reboots on role, rebroadcast, and position changes. LoRa changes apply
+    /// live, and a units-only display write stays connected. Apply still expects the link to
+    /// drop after each of those sections, so a saved config that did not tear Bluetooth down
+    /// is followed by reboot_seconds.
+    private func writeRebootingConfig(_ body: @MainActor () async throws -> Void) async throws {
+        try requireLink()
+        guard sessionPasskey.count == 8 else {
+            throw MeshtasticBLEError.adminFailed("The admin session is missing. Reconnect and try this radio again.")
+        }
+        adminExpectsReboot = true
+        defer { adminExpectsReboot = false }
+        do {
+            try await body()
+        } catch {
+            if linkDropped { return }
+            throw mapCodec(error)
+        }
+        if linkDropped { return }
+        let admin = PhoneAPICodec.rebootAdmin(
+            seconds: PhoneAPICodec.rebootDelaySeconds,
+            passkey: sessionPasskey
+        )
+        do {
+            _ = try await roundTrip(
+                admin: admin,
+                wantResponse: true,
+                wantBody: false,
+                linkDropSucceeds: true
+            )
+        } catch {
+            if linkDropped { return }
+            throw error
+        }
+    }
+
+    private var linkDropped: Bool { sawLinkDrop || connectedPeripheral == nil }
+
+    private func sendConfig(kind: PhoneAPICodec.ConfigKind, body: Data) async throws {
+        let admin = PhoneAPICodec.setConfigAdmin(
+            config: PhoneAPICodec.configWrapper(kind: kind, body: body),
+            passkey: sessionPasskey
+        )
+        _ = try await roundTrip(admin: admin, wantResponse: true, wantBody: false, linkDropSucceeds: true)
+    }
+
+    private func fetchConfig(_ kind: PhoneAPICodec.ConfigKind) async throws -> Data {
+        let type: UInt64
+        let label: String
+        switch kind {
+        case .device:
+            type = 0
+            label = "device"
+        case .position:
+            type = 1
+            label = "position"
+        case .display:
+            type = 4
+            label = "display"
+        case .lora:
+            type = 5
+            label = "LoRa"
+        }
+        let admin = PhoneAPICodec.getConfigAdmin(kind: type, passkey: sessionPasskey)
+        guard let message = try await roundTrip(
+            admin: admin,
+            wantResponse: true,
+            wantBody: true,
+            linkDropSucceeds: false
+        ),
+              let config = message.config,
+              config.kind == kind else {
+            throw MeshtasticBLEError.adminFailed("The radio did not return \(label) config.")
+        }
+        return config.body
+    }
+
+    private func fetchChannel() async throws -> PhoneAPICodec.ParsedChannel {
+        let admin = PhoneAPICodec.getChannelAdmin(index: 0, passkey: sessionPasskey)
+        guard let message = try await roundTrip(
+            admin: admin,
+            wantResponse: true,
+            wantBody: true,
+            linkDropSucceeds: false
+        ),
+              let channel = message.channel else {
+            throw MeshtasticBLEError.adminFailed("The radio did not return the primary channel.")
+        }
+        return channel
+    }
+
+    private func roundTrip(
+        admin: Data,
+        wantResponse: Bool,
+        wantBody: Bool,
+        linkDropSucceeds: Bool
+    ) async throws -> PhoneAPICodec.ParsedAdmin? {
+        guard let nodeNum, nodeNum != 0 else {
+            throw MeshtasticBLEError.adminFailed("The radio did not report a node number.")
+        }
+        let packetID = nextPacketID()
+        let frame = PhoneAPICodec.toRadioPacket(
+            to: nodeNum,
+            packetID: packetID,
+            admin: admin,
+            wantResponse: wantResponse
+        )
+        try await writeWithRetry(frame)
+        return try await waitForAdmin(
+            packetID: packetID,
+            wantBody: wantBody,
+            linkDropSucceeds: linkDropSucceeds,
+            timeout: 10
+        )
+    }
+
+    private func waitForAdmin(
+        packetID: UInt32,
+        wantBody: Bool,
+        linkDropSucceeds: Bool,
+        timeout: TimeInterval
+    ) async throws -> PhoneAPICodec.ParsedAdmin? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if sawLinkDrop {
+                if linkDropSucceeds { return nil }
+                throw MeshtasticBLEError.adminFailed("The radio dropped the Bluetooth link during the admin write.")
+            }
+            let frame: Data
+            do {
+                frame = try await readNextFrame(until: deadline)
+            } catch {
+                if sawLinkDrop && linkDropSucceeds { return nil }
+                throw error
+            }
+            switch try PhoneAPICodec.classify(frame) {
+            case .notice(let text):
+                lastNotice = text
+            case .routing(let requestID, let code) where requestID == packetID:
+                if let code, code != 0 {
+                    throw MeshtasticBLEError.adminFailed(PhoneAPICodec.routingFailureText(code))
+                }
+                if !wantBody { return nil }
+            case .admin(let requestID, let message) where requestID == packetID:
+                if let key = message.passkey, key.count == 8 {
+                    adoptPasskey(key)
+                }
+                if wantBody && message.config == nil && message.channel == nil && message.passkey == nil {
+                    continue
+                }
+                return message
+            default:
+                break
+            }
+        }
+        if sawLinkDrop && linkDropSucceeds { return nil }
+        throw MeshtasticBLEError.adminFailed(noticeSuffix("The radio did not acknowledge the admin write before the timeout."))
+    }
+
+    private func store(_ slice: PhoneAPICodec.ConfigSlice) {
+        switch slice.kind {
+        case .lora: loraConfig = slice.body
+        case .device: deviceConfig = slice.body
+        case .position: positionConfig = slice.body
+        case .display: displayConfig = slice.body
+        }
+    }
+
+    private func nextPacketID() -> UInt32 {
+        packetCounter &+= 1
+        if packetCounter == 0
+            || packetCounter == PhoneAPICodec.configOnlyNonce
+            || packetCounter == PhoneAPICodec.nodesOnlyNonce {
+            packetCounter = 1
+        }
+        return packetCounter
+    }
+
+    private func adoptPasskey(_ key: Data) {
+        guard key.count == 8 else { return }
+        scrubPasskey()
+        sessionPasskey = key
+    }
+
+    private func scrubPasskey() {
+        for index in sessionPasskey.indices {
+            sessionPasskey[index] = 0
+        }
+        sessionPasskey = Data()
+    }
+
+    private func scrubSession() {
+        scrubPasskey()
+        nodeNum = nil
+        loraConfig = nil
+        deviceConfig = nil
+        positionConfig = nil
+        displayConfig = nil
+    }
+
+    private func noticeSuffix(_ message: String) -> String {
+        guard let lastNotice, !lastNotice.isEmpty else { return message }
+        return "\(message) \(lastNotice)"
+    }
+
+    private func mapCodec(_ error: Error) -> Error {
+        if error is PhoneAPICodec.CodecError {
+            return MeshtasticBLEError.adminFailed("Mesh Config could not encode the admin message.")
+        }
+        return error
+    }
+
+    // MARK: - FromRadio drain
+
+    private func discardQueuedPackets() async throws {
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline {
+            do {
+                let data = try await readOnce(timeout: 2)
+                if data.isEmpty {
+                    if fromNumPending {
+                        fromNumPending = false
+                        continue
+                    }
+                    return
+                }
+            } catch MeshtasticBLEError.timedOut {
+                if let queued = popPending(), !queued.isEmpty {
+                    continue
+                }
+                return
+            }
+        }
+        throw MeshtasticBLEError.timedOut
+    }
+
+    private func readNextFrame(until deadline: Date) async throws -> Data {
+        while Date() < deadline {
+            if sawLinkDrop { throw MeshtasticBLEError.notConnected }
+            do {
+                let slice = min(8.0, max(0.2, deadline.timeIntervalSinceNow))
+                let data = try await readOnce(timeout: slice)
+                if !data.isEmpty { return data }
+                if fromNumPending {
+                    fromNumPending = false
+                    continue
+                }
+                let remaining = deadline.timeIntervalSinceNow
+                if remaining <= 0 { break }
+                _ = await waitForFromNum(timeout: min(1.5, remaining))
+            } catch MeshtasticBLEError.timedOut {
+                if let queued = popPending(), !queued.isEmpty { return queued }
+                if Date() >= deadline { throw MeshtasticBLEError.timedOut }
+            }
+        }
+        if let queued = popPending(), !queued.isEmpty { return queued }
+        throw MeshtasticBLEError.timedOut
+    }
+
+    private func readOnce(timeout: TimeInterval) async throws -> Data {
+        if let queued = popPending() { return queued }
+        guard let connected = connectedPeripheral, let fromRadio else { throw MeshtasticBLEError.notConnected }
+        return try await withThrowingTaskGroup(of: Data.self) { group in
+            group.addTask { @MainActor in
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+                    self.storeRead(continuation)
+                    connected.readValue(for: fromRadio)
+                }
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(max(timeout, 0.05) * 1_000_000_000))
+                await self.failRead(MeshtasticBLEError.timedOut)
+                throw MeshtasticBLEError.timedOut
+            }
+            let next = try await group.next()
+            group.cancelAll()
+            guard let next else { throw MeshtasticBLEError.timedOut }
+            return next
+        }
+    }
+
+    private func waitForFromNum(timeout: TimeInterval) async -> Bool {
+        if fromNumPending { return true }
+        return await withTaskGroup(of: Bool.self) { group in
+            group.addTask { @MainActor in
+                await withCheckedContinuation { continuation in
+                    if self.fromNumPending {
+                        continuation.resume()
+                    } else {
+                        self.fromNumWaiters.append(continuation)
+                    }
+                }
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(max(timeout, 0.05) * 1_000_000_000))
+                return false
+            }
+            let woke = await group.next() ?? false
+            group.cancelAll()
+            if !woke {
+                self.resumeFromNumWaiters()
+            }
+            return woke || self.fromNumPending
+        }
+    }
+
+    private func waitForNotifyReady() async {
+        if fromNumNotifyReady { return }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { @MainActor in
+                await withCheckedContinuation { continuation in
+                    if self.fromNumNotifyReady {
+                        continuation.resume()
+                    } else {
+                        self.notifyWaiters.append(continuation)
+                    }
+                }
+            }
+            group.addTask { @MainActor in
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                self.resumeNotifyWaiters()
+            }
+            await group.next()
+            group.cancelAll()
+        }
+    }
+
+    private func writeWithRetry(_ data: Data) async throws {
+        var attempt = 0
+        while true {
+            do {
+                try await writeOnce(data)
+                return
+            } catch let error as CBATTError where error.code == .insufficientResources && attempt < 3 {
+                attempt += 1
+                try await Task.sleep(nanoseconds: UInt64(attempt * 120_000_000))
+            }
+        }
+    }
+
+    private func writeOnce(_ data: Data) async throws {
+        guard let connected = connectedPeripheral, let toRadio else { throw MeshtasticBLEError.notConnected }
+        guard toRadio.properties.contains(.write) || toRadio.properties.contains(.writeWithoutResponse) else {
+            throw MeshtasticBLEError.adminFailed("The radio did not offer a writable ToRadio characteristic.")
+        }
+        if toRadio.properties.contains(.write) {
+            let limit = connected.maximumWriteValueLength(for: .withResponse)
+            if limit > 0 && data.count > limit {
+                throw MeshtasticBLEError.adminFailed(
+                    "The admin message is larger than this radio's Bluetooth write limit."
+                )
+            }
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask { @MainActor in
+                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                        self.storeWrite(continuation)
+                        connected.writeValue(data, for: toRadio, type: .withResponse)
+                    }
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 8_000_000_000)
+                    await self.failWrite(MeshtasticBLEError.timedOut)
+                    throw MeshtasticBLEError.timedOut
+                }
+                try await group.next()
+                group.cancelAll()
+            }
+            return
+        }
+        connected.writeValue(data, for: toRadio, type: .withoutResponse)
+    }
+
+    private func popPending() -> Data? {
+        guard !pendingReads.isEmpty else { return nil }
+        return pendingReads.removeFirst()
+    }
+
+    private func failRead(_ error: Error) {
+        _ = resumeRead(.failure(error))
+    }
+
+    private func failWrite(_ error: Error) {
+        _ = resumeWrite(.failure(error))
+    }
+
+    private func failPendingIO(_ error: Error) {
+        failRead(error)
+        failWrite(error)
+        resumeFromNumWaiters()
+        resumeNotifyWaiters()
+    }
+
+    private func tearDownLink() {
+        connectedPeripheral = nil
+        toRadio = nil
+        fromRadio = nil
+        fromNum = nil
+        fromNumNotifyReady = false
+        fromNumPending = false
+        pendingReads.removeAll()
+        scrubSession()
     }
 
     // MARK: - Central lifecycle
@@ -235,6 +772,57 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         continuation?.resume(returning: dropped)
     }
 
+    private func storeRead(_ continuation: CheckedContinuation<Data, Error>) {
+        gate.lock()
+        let previous = readContinuation
+        readContinuation = continuation
+        gate.unlock()
+        previous?.resume(throwing: MeshtasticBLEError.cancelled)
+    }
+
+    private func resumeRead(_ result: Result<Data, Error>) -> Bool {
+        gate.lock()
+        let continuation = readContinuation
+        readContinuation = nil
+        gate.unlock()
+        guard let continuation else { return false }
+        continuation.resume(with: result)
+        return true
+    }
+
+    private func storeWrite(_ continuation: CheckedContinuation<Void, Error>) {
+        gate.lock()
+        let previous = writeContinuation
+        writeContinuation = continuation
+        gate.unlock()
+        previous?.resume(throwing: MeshtasticBLEError.cancelled)
+    }
+
+    private func resumeWrite(_ result: Result<Void, Error>) -> Bool {
+        gate.lock()
+        let continuation = writeContinuation
+        writeContinuation = nil
+        gate.unlock()
+        guard let continuation else { return false }
+        continuation.resume(with: result)
+        return true
+    }
+
+    private func resumeFromNumWaiters() {
+        let waiters = fromNumWaiters
+        fromNumWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func resumeNotifyWaiters() {
+        let waiters = notifyWaiters
+        notifyWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
 }
 
 extension CoreBluetoothMeshtasticTransport: CBCentralManagerDelegate {
@@ -285,9 +873,8 @@ extension CoreBluetoothMeshtasticTransport: CBCentralManagerDelegate {
         didFailToConnect peripheral: CBPeripheral,
         error: Error?
     ) {
-        let message = error?.localizedDescription
         Task { @MainActor in
-            self.resumeConnect(.failure(message.map { _ in MeshtasticBLEError.notConnected } ?? .notConnected))
+            self.resumeConnect(.failure(MeshtasticBLEError.notConnected))
         }
     }
 
@@ -299,13 +886,15 @@ extension CoreBluetoothMeshtasticTransport: CBCentralManagerDelegate {
         Task { @MainActor in
             let wasCurrent = self.connectedPeripheral?.identifier == peripheral.identifier
             if wasCurrent {
-                self.connectedPeripheral = nil
+                self.sawLinkDrop = true
+                self.tearDownLink()
             }
             if self.connectContinuation != nil {
                 self.resumeConnect(.failure(MeshtasticBLEError.notConnected))
                 return
             }
-            if self.expectingLinkDrop {
+            self.failPendingIO(MeshtasticBLEError.notConnected)
+            if self.expectingLinkDrop || self.adminExpectsReboot {
                 self.resumeLinkDrop(true)
             } else if wasCurrent {
                 self.onUnexpectedLinkLoss?()
@@ -352,6 +941,59 @@ extension CoreBluetoothMeshtasticTransport: CBPeripheralDelegate {
             }
             peripheral.setNotifyValue(true, for: fromNum)
             self.resumeConnect(.success(()))
+        }
+    }
+
+    nonisolated func peripheral(
+        _ peripheral: CBPeripheral,
+        didUpdateNotificationStateFor characteristic: CBCharacteristic,
+        error: Error?
+    ) {
+        guard characteristic.uuid == Self.fromNumUUID else { return }
+        Task { @MainActor in
+            self.fromNumNotifyReady = error == nil
+            self.resumeNotifyWaiters()
+        }
+    }
+
+    nonisolated func peripheral(
+        _ peripheral: CBPeripheral,
+        didUpdateValueFor characteristic: CBCharacteristic,
+        error: Error?
+    ) {
+        let uuid = characteristic.uuid
+        let value = characteristic.value ?? Data()
+        Task { @MainActor in
+            if uuid == Self.fromNumUUID {
+                self.fromNumPending = true
+                self.resumeFromNumWaiters()
+                return
+            }
+            guard uuid == Self.fromRadioUUID else { return }
+            if let error {
+                if !self.resumeRead(.failure(error)) {
+                    self.pendingReads.append(Data())
+                }
+                return
+            }
+            if !self.resumeRead(.success(value)) {
+                self.pendingReads.append(value)
+            }
+        }
+    }
+
+    nonisolated func peripheral(
+        _ peripheral: CBPeripheral,
+        didWriteValueFor characteristic: CBCharacteristic,
+        error: Error?
+    ) {
+        guard characteristic.uuid == Self.toRadioUUID else { return }
+        Task { @MainActor in
+            if let error {
+                _ = self.resumeWrite(.failure(error))
+            } else {
+                _ = self.resumeWrite(.success(()))
+            }
         }
     }
 }

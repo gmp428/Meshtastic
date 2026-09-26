@@ -14,6 +14,7 @@
 		E10000000000000000000204 /* ApplySession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000104 /* ApplySession.swift */; };
 		E10000000000000000000205 /* FleetRadioTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000105 /* FleetRadioTransport.swift */; };
 		E10000000000000000000206 /* CoreBluetoothMeshtasticTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000106 /* CoreBluetoothMeshtasticTransport.swift */; };
+		E10000000000000000000211 /* PhoneAPICodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000111 /* PhoneAPICodec.swift */; };
 		E10000000000000000000207 /* SimulatedMeshtasticTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000107 /* SimulatedMeshtasticTransport.swift */; };
 		E10000000000000000000208 /* ApplyDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000108 /* ApplyDriver.swift */; };
 		E10000000000000000000209 /* FleetLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000109 /* FleetLibrary.swift */; };
@@ -37,6 +38,7 @@
 		E10000000000000000000104 /* ApplySession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplySession.swift; sourceTree = "<group>"; };
 		E10000000000000000000105 /* FleetRadioTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRadioTransport.swift; sourceTree = "<group>"; };
 		E10000000000000000000106 /* CoreBluetoothMeshtasticTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreBluetoothMeshtasticTransport.swift; sourceTree = "<group>"; };
+		E10000000000000000000111 /* PhoneAPICodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneAPICodec.swift; sourceTree = "<group>"; };
 		E10000000000000000000107 /* SimulatedMeshtasticTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatedMeshtasticTransport.swift; sourceTree = "<group>"; };
 		E10000000000000000000108 /* ApplyDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplyDriver.swift; sourceTree = "<group>"; };
 		E10000000000000000000109 /* FleetLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetLibrary.swift; sourceTree = "<group>"; };
@@ -122,6 +124,7 @@
 				E10000000000000000000104 /* ApplySession.swift */,
 				E10000000000000000000105 /* FleetRadioTransport.swift */,
 				E10000000000000000000106 /* CoreBluetoothMeshtasticTransport.swift */,
+				E10000000000000000000111 /* PhoneAPICodec.swift */,
 				E10000000000000000000107 /* SimulatedMeshtasticTransport.swift */,
 				E10000000000000000000108 /* ApplyDriver.swift */,
 			);
@@ -236,6 +239,7 @@
 				E10000000000000000000204 /* ApplySession.swift in Sources */,
 				E10000000000000000000205 /* FleetRadioTransport.swift in Sources */,
 				E10000000000000000000206 /* CoreBluetoothMeshtasticTransport.swift in Sources */,
+				E10000000000000000000211 /* PhoneAPICodec.swift in Sources */,
 				E10000000000000000000207 /* SimulatedMeshtasticTransport.swift in Sources */,
 				E10000000000000000000208 /* ApplyDriver.swift in Sources */,
 				E10000000000000000000209 /* FleetLibrary.swift in Sources */,

@@ -22,7 +22,7 @@ A Linux checkout cannot run `xcodebuild`. The project file is still a normal Xco
 
 ### Try the loop without a radio
 
-Debug builds have **Simulated radios (DEBUG)** on the Apply tab. That transport is compiled only with `#if DEBUG`. It is labeled DEBUG on every row. It walks handshake, the section order, reboot reconnects, channel send, and verify in the UI. It does not talk to hardware and it does not mean a protobuf admin write succeeded.
+Debug builds have **Simulated radios (DEBUG)** on the Apply tab. That transport is compiled only with `#if DEBUG`. It is labeled DEBUG on every row. It walks handshake, the section order, reboot reconnects, channel send, and verify in the UI. It does not talk to hardware. The live radio path is the CoreBluetooth transport, which encodes real PhoneAPI admin messages.
 
 Release builds only include the CoreBluetooth transport.
 
@@ -92,11 +92,27 @@ Bluetooth setup is the same path for:
 
 ATAK or iTAK on the phone talks to the Local TAK Server inside the Meshtastic phone app, on that same phone. Packaging that server, flashing firmware, and programming a dock of radios over USB are out of scope here. V3 firmware is flashed from a computer. T114 and T1000-E updates are separate OTA paths.
 
+## PhoneAPI protobufs
+
+Live apply encodes and decodes the Meshtastic PhoneAPI admin subset in `MeshConfig/Apply/PhoneAPICodec.swift`: `ToRadio`, `FromRadio`, `MeshPacket`, `Data`, `AdminMessage`, `Config`, and `Channel`.
+
+The field numbers match [meshtastic/protobufs](https://github.com/meshtastic/protobufs) commit `ad0bf31e82886d794334dcc62abb80da862a8ec7` (master, 2026-09-25). This repo does not vendor the protobuf tree or generated SwiftProtobuf sources. The codec keeps unknown fields inside a config body so a `set_config` does not wipe settings the profile does not own (for example LoRa transmit enable).
+
+Handshake writes `ToRadio.want_config_id` **69420** (firmware’s config-only nonce, so the node database is not downloaded), drains FromRadio until `config_complete_id` matches, then sends `AdminMessage.get_owner_request` to seed the 8-byte `session_passkey`. Mutating admin messages include that passkey. It stays in memory for the connection and is never logged.
+
+LoRa, device, position, and display are each `set_config`. Channel is last: one `set_channel` of the primary (index 0, 32-byte key, precise location = 32 position bits) which saves without a reboot. Mutating admin messages set `want_response`. Firmware answers with a `Routing` packet (`error_reason` NONE, `request_id` equal to the packet id) after AdminModule accepts the write. A Bluetooth `want_ack` alone is not treated as success, because that ack can be generated before the admin module runs.
+
+Current firmware applies LoRa changes live and does not reboot for a units-only display write. Role, rebroadcast, and position changes still drop Bluetooth. If a config section stays connected after the routing ack, the transport sends `reboot_seconds` so the apply loop can reconnect and continue. Channel does not.
+
+Read-back uses `get_config` and `get_channel` for the checklist fields in `ProfileAcceptance`.
+
+To regenerate after a protobuf change: check out that commit or a newer `meshtastic/protobufs` master, diff `meshtastic/mesh.proto`, `admin.proto`, `config.proto`, `channel.proto`, and `portnums.proto` against the constants in `PhoneAPICodec.swift`, and update the codec. `PhoneAPICodec.selfCheck()` compares a few frames to bytes produced by `protoc` for this commit; a handshake refuses to write if that check fails.
+
 ## Known limits
 
 CoreBluetooth scan, connect, and GATT discovery use the public Meshtastic service (`6BA1B218-15A8-461F-9FA8-5DCAE273EAFD`) and the ToRadio, FromRadio, and FromNum characteristics.
 
-Admin protobuf writes are not encoded yet. After the link is up, handshake, `set_config`, channel Send, and read-back throw a clear error instead of reporting success. The DEBUG simulated transport is how you exercise the apply UI until Meshtastic protobufs are integrated.
+Managed-mode radios ignore local Bluetooth admin. This app does not flash firmware, does not program Wi‑Fi, and does not configure a Local TAK Server. A Linux checkout still cannot run `xcodebuild`.
 
 ## Project layout
 
@@ -107,7 +123,7 @@ MeshConfig/
   Info.plist
   Models/            FleetProfile, ConfiguredDevice
   Security/          FleetPSKStore (Keychain)
-  Apply/             ApplySession, CoreBluetooth transport, DEBUG simulator
+  Apply/             ApplySession, PhoneAPI codec, CoreBluetooth transport, DEBUG simulator
   Persistence/       profile and roster files
   UI/                Profiles, Devices, Apply, Settings
 docs/                PSK, apply/verify, and screen specs
