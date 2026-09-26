@@ -320,9 +320,10 @@ struct ScanView: View {
     }
 }
 
+@MainActor
 struct ApplyProgressView: View {
     @ObservedObject var session: ApplySession
-    var onCancel: () -> Void
+    var onCancel: @MainActor () -> Void
 
     var body: some View {
         List {
@@ -367,7 +368,8 @@ struct ApplyProgressView: View {
     }
 
     private var steps: [ApplyStepRow] {
-        ApplyStepRow.rows(for: session)
+        // Copy actor-isolated fields here. `??` and `map` below are nonisolated.
+        ApplyStepRow.rows(state: session.state, sections: session.orderedSections)
     }
 
     private var doneCount: Int {
@@ -402,8 +404,7 @@ struct ApplyStepRow: Identifiable {
     var status: ApplyStepStatus
     var detail: String?
 
-    static func rows(for session: ApplySession) -> [ApplyStepRow] {
-        let sections = session.orderedSections
+    static func rows(state: ApplySessionState, sections: [ApplySection]) -> [ApplyStepRow] {
         var titles = ["Connected & handshake", "Fleet PSK ready"]
         titles.append(contentsOf: sections.map(\.progressTitle))
         titles.append("Verify")
@@ -411,8 +412,8 @@ struct ApplyStepRow: Identifiable {
         ids.append(contentsOf: sections.map(\.rawValue))
         ids.append("verify")
 
-        let failedIndex = failedStepIndex(session)
-        let currentIndex = failedIndex ?? activeStepIndex(session.state, sections: sections)
+        let failedIndex = failedStepIndex(state, sections: sections)
+        let currentIndex = failedIndex ?? activeStepIndex(state, sections: sections)
 
         return titles.indices.map { index in
             let status: ApplyStepStatus
@@ -424,7 +425,7 @@ struct ApplyStepRow: Identifiable {
                 } else {
                     status = .waiting
                 }
-            } else if session.state == .succeeded {
+            } else if state == .succeeded {
                 status = .done
             } else if index < currentIndex {
                 status = .done
@@ -433,14 +434,14 @@ struct ApplyStepRow: Identifiable {
             } else {
                 status = .waiting
             }
-            let detail = index == currentIndex ? detailText(session.state) : nil
+            let detail = index == currentIndex ? detailText(state) : nil
             return ApplyStepRow(id: ids[index], title: titles[index], status: status, detail: detail)
         }
     }
 
-    private static func failedStepIndex(_ session: ApplySession) -> Int? {
-        guard case .failed(let failure) = session.state else { return nil }
-        return activeStepIndex(failure.stage, sections: session.orderedSections)
+    private static func failedStepIndex(_ state: ApplySessionState, sections: [ApplySection]) -> Int? {
+        guard case .failed(let failure) = state else { return nil }
+        return activeStepIndex(failure.stage, sections: sections)
     }
 
     private static func activeStepIndex(_ state: ApplySessionState, sections: [ApplySection]) -> Int {
