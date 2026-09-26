@@ -9,7 +9,7 @@ struct ApplyOutcome: Equatable {
     var profileName: String
     var profileID: UUID
     var role: DeviceRole
-    var checklist: [(id: String, label: String, ok: Bool)]
+    var checklist: [VerifyCheckResult]
     var message: String
     var failedChecks: [String]
 }

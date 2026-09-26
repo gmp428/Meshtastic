@@ -72,7 +72,7 @@ struct ApplySessionConfig: Sendable {
 final class ApplySession: ObservableObject {
     @Published private(set) var state: ApplySessionState = .idle
     @Published private(set) var progressIndex: Int = 0
-    @Published private(set) var lastChecklist: [(id: String, label: String, ok: Bool)] = []
+    @Published private(set) var lastChecklist: [VerifyCheckResult] = []
 
     let profile: FleetProfile
     let role: DeviceRole

@@ -546,14 +546,14 @@ struct ApplyResultView: View {
 
     private var checklist: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(outcome.checklist.enumerated()), id: \.offset) { pair in
+            ForEach(outcome.checklist) { item in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Image(systemName: pair.element.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundStyle(pair.element.ok ? .green : .red)
+                    Image(systemName: item.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .foregroundStyle(item.ok ? .green : .red)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(pair.element.label)
+                        Text(item.label)
                             .font(.subheadline)
-                        Text(pair.element.id)
+                        Text(item.id)
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                     }

@@ -309,6 +309,14 @@ struct DeviceSnapshot: Sendable {
     var positionFlags: PositionFlagSet?
 }
 
+/// One TAK verify row. A named type so checklists can live in `Equatable` results.
+/// Swift tuples do not conform to `Equatable`, so `[tuple]` blocks synthesized conformance.
+struct VerifyCheckResult: Identifiable, Equatable, Sendable {
+    var id: String
+    var label: String
+    var ok: Bool
+}
+
 enum ProfileAcceptance {
     static let takChecks: [(id: String, label: String)] = [
         ("lora.preset", "LoRa preset is ShortTurbo"),
@@ -324,23 +332,22 @@ enum ProfileAcceptance {
         ("pos.geoid", "GEOIDAL_SEPARATION on when profile requests it"),
     ]
 
-    static func evaluate(profile: FleetProfile, snap: DeviceSnapshot, appliedRole: DeviceRole) -> [(id: String, label: String, ok: Bool)] {
+    static func evaluate(profile: FleetProfile, snap: DeviceSnapshot, appliedRole: DeviceRole) -> [VerifyCheckResult] {
         [
-            ("lora.preset", "LoRa preset is ShortTurbo", snap.modemPreset == .shortTurbo),
-            ("lora.mqtt", "Ignore MQTT is on", snap.ignoreMQTT == true),
-            ("lora.slot", "Frequency slot matches profile", snap.frequencySlot == profile.lora.frequencySlot),
-            ("ch.name", "Primary channel is private", {
+            VerifyCheckResult(id: "lora.preset", label: "LoRa preset is ShortTurbo", ok: snap.modemPreset == .shortTurbo),
+            VerifyCheckResult(id: "lora.mqtt", label: "Ignore MQTT is on", ok: snap.ignoreMQTT == true),
+            VerifyCheckResult(id: "lora.slot", label: "Frequency slot matches profile", ok: snap.frequencySlot == profile.lora.frequencySlot),
+            VerifyCheckResult(id: "ch.name", label: "Primary channel is private", ok: {
                 guard let n = snap.primaryChannelName?.lowercased() else { return false }
                 return n != "longfast" && n != "shortfast" && n == profile.channel.name.lowercased()
             }()),
-            ("ch.psk", "Primary PSK is non-default AES-256", snap.primaryHasNonDefaultPSK == true),
-            ("ch.precise", "Precise location is on", snap.preciseLocation == true),
-            ("dev.role", "Role matches apply choice", snap.role == appliedRole),
-            ("dev.rebroadcast", "Rebroadcast is LOCAL_ONLY", snap.rebroadcastMode == .localOnly),
-            ("pos.smart", "Smart Position matches profile", snap.smartPosition == profile.position.smartPosition),
-            ("pos.hae", "Altitude is HAE path (not MSL)", snap.positionFlags?.isTAKAltitudeCorrect == true),
-            ("pos.geoid", "Geoidal separation matches profile",
-             snap.positionFlags?.geoidalSeparation == profile.position.flags.geoidalSeparation),
+            VerifyCheckResult(id: "ch.psk", label: "Primary PSK is non-default AES-256", ok: snap.primaryHasNonDefaultPSK == true),
+            VerifyCheckResult(id: "ch.precise", label: "Precise location is on", ok: snap.preciseLocation == true),
+            VerifyCheckResult(id: "dev.role", label: "Role matches apply choice", ok: snap.role == appliedRole),
+            VerifyCheckResult(id: "dev.rebroadcast", label: "Rebroadcast is LOCAL_ONLY", ok: snap.rebroadcastMode == .localOnly),
+            VerifyCheckResult(id: "pos.smart", label: "Smart Position matches profile", ok: snap.smartPosition == profile.position.smartPosition),
+            VerifyCheckResult(id: "pos.hae", label: "Altitude is HAE path (not MSL)", ok: snap.positionFlags?.isTAKAltitudeCorrect == true),
+            VerifyCheckResult(id: "pos.geoid", label: "Geoidal separation matches profile", ok: snap.positionFlags?.geoidalSeparation == profile.position.flags.geoidalSeparation),
         ]
     }
 }
