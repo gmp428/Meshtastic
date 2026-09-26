@@ -166,7 +166,7 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         defer { expectingLinkDrop = false }
         return await withTaskGroup(of: Bool.self) { group in
             group.addTask { @MainActor in
-                await withCheckedContinuation { continuation in
+                return await withCheckedContinuation { continuation in
                     self.storeLinkDropContinuation(continuation)
                 }
             }
@@ -198,7 +198,7 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         if manager.state != .unknown && manager.state != .resetting {
             return manager.state
         }
-        await withCheckedContinuation { continuation in
+        return await withCheckedContinuation { continuation in
             stateWaiters.append(continuation)
         }
     }
