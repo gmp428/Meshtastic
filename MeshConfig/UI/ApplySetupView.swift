@@ -368,7 +368,7 @@ struct ApplyProgressView: View {
     }
 
     private var steps: [ApplyStepRow] {
-        // Copy actor-isolated fields here. `??` and `map` below are nonisolated.
+        // Read actor-isolated fields on the main actor, then build rows from copies.
         ApplyStepRow.rows(state: session.state, sections: session.orderedSections)
     }
 
