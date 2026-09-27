@@ -16,9 +16,9 @@ Requirements: Xcode 15 or later, iOS 17 or later, an iPhone or the iPhone simula
 4. Set your signing team on the Mesh Config target if you run on a device. The bundle id is `com.meshconfig.app`.
 5. Run.
 
-The Mesh Config target is **1.1.0 (2)**: `MARKETING_VERSION` is the short version, `CURRENT_PROJECT_VERSION` is the build number. Settings shows `Version 1.1.0 (2)` from the app bundle, and the Apply screen repeats that line. After you pull and Run, those screens should show this number.
+The Mesh Config target is **1.1.1 (3)**: `MARKETING_VERSION` is the short version, `CURRENT_PROJECT_VERSION` is the build number. Settings shows `Version 1.1.1 (3)` from the app bundle, and the Apply screen repeats that line. After you pull and Run, those screens should show this number.
 
-Bump both values on every shippable change so a TestFlight or device install can be told apart from the last one. Raise `CURRENT_PROJECT_VERSION` by 1 each time, in both the Debug and Release configurations. Raise `MARKETING_VERSION` when you want a new short version (1.1.0, then 1.2.0). Do not type the number into Swift; Settings and Apply read `CFBundleShortVersionString` and `CFBundleVersion`.
+Bump both values on every shippable change so a TestFlight or device install can be told apart from the last one. Raise `CURRENT_PROJECT_VERSION` by 1 each time, in both the Debug and Release configurations. Raise `MARKETING_VERSION` when you want a new short version (1.1.1, then 1.2.0). Do not type the number into Swift; Settings and Apply read `CFBundleShortVersionString` and `CFBundleVersion`.
 
 Bluetooth permission is requested when you scan. The usage string is `NSBluetoothAlwaysUsageDescription` in `MeshConfig/Info.plist`.
 
@@ -82,6 +82,8 @@ Order, because the name, LoRa, Device, Position, and Display reboot on save and 
 8. Channel — remove the default LongFast/ShortFast primary, write the private primary (name, 32-byte key, precise location, uplink and downlink), and **Send**. No reboot.
 9. Read back and require every TAK check in `ProfileAcceptance.evaluate`, including that the long name matches what was entered.
 10. Disconnect. Show pass or fail. Failed checks are ids and labels only. A successful verify stores that long name and short name on the device roster.
+
+After each reboot section the app waits up to 60 seconds for the link to drop, then up to 90 seconds for Bluetooth to come back and the handshake to finish. A tracker can beep late in that window. One missed connect does not end the wait.
 
 Full checklist and timeouts: [docs/APPLY_VERIFY.md](docs/APPLY_VERIFY.md). Screen contract: [docs/SCREENS_UX.md](docs/SCREENS_UX.md).
 

@@ -76,7 +76,7 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         central?.stopScan()
     }
 
-    func connect(peripheralID: UUID) async throws {
+    func connect(peripheralID: UUID, timeout: TimeInterval) async throws {
         stopScan()
         let manager = ensureCentral()
         let state = await awaitState(manager)
@@ -91,7 +91,7 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         do {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 self.storeConnectContinuation(continuation)
-                self.armConnectTimeout(manager: manager, peripheral: peripheral)
+                self.armConnectTimeout(manager: manager, peripheral: peripheral, timeout: timeout)
                 manager.connect(peripheral, options: nil)
             }
         } catch {
@@ -103,11 +103,12 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         connectTimeout = nil
     }
 
-    private func armConnectTimeout(manager: CBCentralManager, peripheral: CBPeripheral) {
+    private func armConnectTimeout(manager: CBCentralManager, peripheral: CBPeripheral, timeout: TimeInterval) {
         connectTimeout?.cancel()
+        let nanos = UInt64(max(timeout, 1) * 1_000_000_000)
         connectTimeout = Task { @MainActor in
             do {
-                try await Task.sleep(nanoseconds: 15_000_000_000)
+                try await Task.sleep(nanoseconds: nanos)
             } catch {
                 return
             }

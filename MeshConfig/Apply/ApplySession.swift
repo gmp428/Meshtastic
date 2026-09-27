@@ -60,10 +60,15 @@ struct ApplyFailure: Error, Equatable, Sendable {
 }
 
 struct ApplySessionConfig: Sendable {
+    /// First connect, while the radio is already on and advertising.
     var connectTimeout: TimeInterval = 15
     var writeAckTimeout: TimeInterval = 10
-    var rebootGrace: TimeInterval = 20
-    var reconnectTimeout: TimeInterval = 30
+    /// How long to wait for Bluetooth to drop after a reboot section.
+    /// Trackers such as the T1000-E beep and reboot well after a 20s grace.
+    var rebootGrace: TimeInterval = 60
+    /// How long to keep trying Bluetooth after that drop, including a slow boot.
+    /// A single missed connect does not end the wait.
+    var reconnectTimeout: TimeInterval = 90
     /// Default order: name, then reboot sections, channel last (Send, no reboot), then verify.
     var sectionOrder: [ApplySection] = [.owner, .lora, .device, .position, .display, .channel]
 }
@@ -182,9 +187,28 @@ final class ApplySession: ObservableObject {
             state = .reconnecting(after: section)
             return
         }
+        // The radio can drop again while it is still booting. That is part of the reconnect,
+        // not a failed session, until the next handshake finishes.
+        if let section = rebootResumeSection {
+            switch state {
+            case .handshaking, .reconnecting:
+                state = .reconnecting(after: section)
+                return
+            default:
+                break
+            }
+        }
         // Unexpected drop mid-apply
         if !isTerminal && state != .disconnecting && state != .disconnected {
             fail(stage: state, message: "BLE link lost unexpectedly.", checks: [])
+        }
+    }
+
+    /// Handshake failed before the post-reboot window ended. Stay on this section and try again.
+    func resumeReconnectWait() {
+        guard let section = rebootResumeSection else { return }
+        if case .handshaking = state {
+            state = .reconnecting(after: section)
         }
     }
 
@@ -267,7 +291,7 @@ final class ApplySession: ObservableObject {
 protocol MeshtasticBLETransport: AnyObject {
     /// Scan for Meshtastic service; user picks one peripheral.
     func startScan() async
-    func connect(peripheralID: UUID) async throws
+    func connect(peripheralID: UUID, timeout: TimeInterval) async throws
     /// Write ToRadio.wantConfigID; drain FromRadio until config complete; seed session_passkey via get_owner.
     func handshake() async throws
     func setLoRa(_ settings: LoRaSettings) async throws

@@ -92,11 +92,12 @@ Batching note: if the Meshtastic BLE stack lets you set multiple Config sections
 
 - After each reboot-triggering admin set: mark link lost expected; start reconnect timer.
 - Re-match by **BLE peripheral identifier** first; fall back to advertised node name / MAC if the stack renumbers.
-- Timeouts (starting points; tune on hardware):
-  - connect: 15s
+- Timeouts (tuned for a T1000-E class tracker, which can beep and return to Bluetooth well after 20s):
+  - first connect, radio already on: 15s
   - admin write ack: 10s
-  - reboot disconnect: 5–20s
-  - reconnect: 30s
+  - reboot disconnect (`rebootGrace`): 60s after Name, LoRa, Device, Position, and Display
+  - reconnect (`reconnectTimeout`): 90s, retrying connect and handshake until the radio is back
+- A connect attempt that ends early, or a handshake that drops while the tracker is still booting, does not fail the session while time remains. A handshake that has already started is allowed to finish.
 - On timeout → `failed` with section id; leave radio as-is; user can retry session.
 
 ## Verify (`ProfileAcceptance.evaluate`)

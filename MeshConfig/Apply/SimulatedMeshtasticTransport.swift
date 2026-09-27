@@ -56,7 +56,8 @@ final class SimulatedMeshtasticTransport: FleetRadioTransport {
         scanTask = nil
     }
 
-    func connect(peripheralID: UUID) async throws {
+    func connect(peripheralID: UUID, timeout: TimeInterval) async throws {
+        _ = timeout
         guard peripheralID == Self.heltecV3 || peripheralID == Self.t1000e else {
             throw MeshtasticBLEError.notConnected
         }

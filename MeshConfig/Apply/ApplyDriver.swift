@@ -143,7 +143,7 @@ final class ApplyDriver: ObservableObject {
     private func runSelectedRadio(_ radio: DiscoveredRadio) async {
         guard let session else { return }
         do {
-            try await transport?.connect(peripheralID: radio.peripheralID)
+            try await transport?.connect(peripheralID: radio.peripheralID, timeout: session.config.connectTimeout)
             guard !Task.isCancelled else { return }
             session.onConnected()
             try await transport?.handshake()
@@ -196,17 +196,13 @@ final class ApplyDriver: ObservableObject {
                     continue
                 }
                 do {
-                    try await transport?.connect(peripheralID: id)
-                    guard !Task.isCancelled else { return }
-                    session.onConnected()
-                    try await transport?.handshake()
-                    guard !Task.isCancelled else { return }
-                    await session.onHandshakeComplete()
+                    try await reconnect(peripheralID: id, session: session)
                 } catch is CancellationError {
                     return
                 } catch {
+                    let waited = Int(session.config.reconnectTimeout.rounded())
                     session.reportFailure(
-                        message: "Reconnect after \(after.displayName) failed. \(safeMessage(error))"
+                        message: "Reconnect after \(after.displayName) failed. Waited \(waited) seconds for Bluetooth to return. \(safeMessage(error))"
                     )
                 }
             case .verifying:
@@ -239,6 +235,53 @@ final class ApplyDriver: ObservableObject {
             case .idle, .scanning, .disconnected:
                 return
             }
+        }
+    }
+
+    /// After a reboot section, keep connecting until the radio is back and the handshake finishes.
+    /// The first CoreBluetooth miss is not fatal: trackers often beep and advertise late.
+    /// A handshake that is already running is allowed to finish even if the clock has passed.
+    private func reconnect(peripheralID: UUID, session: ApplySession) async throws {
+        let deadline = Date().addingTimeInterval(session.config.reconnectTimeout)
+        var lastError: Error = MeshtasticBLEError.timedOut
+        while !Task.isCancelled {
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining < 1 {
+                throw lastError
+            }
+            do {
+                try await transport?.connect(peripheralID: peripheralID, timeout: remaining)
+                guard !Task.isCancelled else { throw CancellationError() }
+                session.onConnected()
+                try await transport?.handshake()
+                guard !Task.isCancelled else { throw CancellationError() }
+                await session.onHandshakeComplete()
+                return
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastError = error
+                if !isRetryableReconnect(error) || deadline.timeIntervalSinceNow < 1 {
+                    throw error
+                }
+                session.resumeReconnectWait()
+                await transport?.disconnect()
+                let pause = min(2.0, deadline.timeIntervalSinceNow)
+                if pause > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000))
+                }
+            }
+        }
+        throw CancellationError()
+    }
+
+    private func isRetryableReconnect(_ error: Error) -> Bool {
+        guard let ble = error as? MeshtasticBLEError else { return true }
+        switch ble {
+        case .timedOut, .notConnected, .serviceNotFound, .bluetoothUnavailable, .adminFailed:
+            return true
+        case .bluetoothOff, .unauthorized, .cancelled, .invalidPSKLength, .protobufNotIntegrated:
+            return false
         }
     }
 

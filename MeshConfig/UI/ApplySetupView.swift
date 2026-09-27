@@ -532,9 +532,9 @@ struct ApplyStepRow: Identifiable {
         case .applying:
             return "Writing"
         case .waitingReboot:
-            return "Waiting for the radio to reboot"
+            return "Waiting for the radio to reboot. Trackers can take a minute."
         case .reconnecting:
-            return "Reconnecting"
+            return "Waiting for Bluetooth to come back, then handshake"
         case .verifying:
             return "Reading back"
         case .failed(let failure):
