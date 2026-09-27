@@ -71,6 +71,8 @@ enum PhoneAPICodec {
         var passkey: Data?
         var config: ConfigSlice?
         var channel: ParsedChannel?
+        /// Raw `User` from `get_owner_response`. Kept so `set_owner` can preserve fields this app does not edit.
+        var owner: Data?
     }
 
     enum Inbound: Equatable {
@@ -90,8 +92,34 @@ enum PhoneAPICodec {
         serialize([Field(number: 3, value: .varint(UInt64(nonce)))])
     }
 
-    static func getOwnerAdmin() -> Data {
-        serialize([Field(number: 3, value: .varint(1))])
+    static func getOwnerAdmin(passkey: Data? = nil) -> Data {
+        var fields = [Field(number: 3, value: .varint(1))]
+        if let passkey, passkey.count == 8 {
+            fields.append(Field(number: passkeyField, value: .bytes(passkey)))
+        }
+        return serialize(fields)
+    }
+
+    static func setOwnerAdmin(user: Data, passkey: Data) -> Data {
+        var fields: [Field] = []
+        upsertBytes(&fields, 32, user)
+        if passkey.count == 8 {
+            upsertBytes(&fields, passkeyField, passkey)
+        }
+        return serialize(fields)
+    }
+
+    /// Replaces long_name (field 2) and short_name (field 3). Every other User field is copied through.
+    static func userMessage(merging existing: Data, longName: String, shortName: String) throws -> Data {
+        var fields = try parse(existing)
+        upsertBytes(&fields, 2, Data(longName.utf8))
+        upsertBytes(&fields, 3, Data(shortName.utf8))
+        return serialize(fields)
+    }
+
+    static func longName(from user: Data) throws -> String? {
+        guard let raw = bytes(try parse(user), 2), !raw.isEmpty else { return nil }
+        return String(data: raw, encoding: .utf8)
     }
 
     static func getConfigAdmin(kind: UInt64, passkey: Data?) -> Data {
@@ -262,7 +290,8 @@ enum PhoneAPICodec {
         lora: Data,
         device: Data,
         position: Data,
-        channel: ParsedChannel
+        channel: ParsedChannel,
+        owner: Data
     ) throws -> DeviceSnapshot {
         let loraFields = try parse(lora)
         let deviceFields = try parse(device)
@@ -288,7 +317,8 @@ enum PhoneAPICodec {
             role: role,
             rebroadcastMode: rebroadcast,
             smartPosition: (varint(positionFields, 2) ?? 0) != 0,
-            positionFlags: flags
+            positionFlags: flags,
+            longName: try longName(from: owner)
         )
     }
 
@@ -393,6 +423,15 @@ enum PhoneAPICodec {
         guard try encodeMatches(
             "880602aa06080102030405060708",
             rebootAdmin(seconds: 2, passkey: Data([UInt8(1), 2, 3, 4, 5, 6, 7, 8]))
+        ) else { return false }
+
+        let existingOwner = try data(hex: "0a032161623001420111")
+        let renamed = try userMessage(merging: existingOwner, longName: "Koala", shortName: "Koal")
+        guard try encodeMatches("0a0321616212054b6f616c611a044b6f616c3001420111", renamed) else { return false }
+        guard try longName(from: renamed) == "Koala" else { return false }
+        guard try encodeMatches(
+            "8202170a0321616212054b6f616c611a044b6f616c3001420111",
+            setOwnerAdmin(user: renamed, passkey: Data())
         ) else { return false }
 
         let wrappedPacket = toRadioPacket(
@@ -540,12 +579,15 @@ enum PhoneAPICodec {
 
     private static func parsedAdmin(_ data: Data) throws -> ParsedAdmin {
         let fields = try parse(data)
-        var message = ParsedAdmin(passkey: bytes(fields, passkeyField), config: nil, channel: nil)
+        var message = ParsedAdmin(passkey: bytes(fields, passkeyField), config: nil, channel: nil, owner: nil)
         if let configBytes = bytes(fields, 6) {
             message.config = try configSlice(configBytes)
         }
         if let channelBytes = bytes(fields, 2) {
             message.channel = try parsedChannel(channelBytes)
+        }
+        if let ownerBytes = bytes(fields, 4), !ownerBytes.isEmpty {
+            message.owner = ownerBytes
         }
         return message
     }

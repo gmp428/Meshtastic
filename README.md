@@ -66,17 +66,18 @@ Details: [docs/PSK_POLICY.md](docs/PSK_POLICY.md).
 
 One active Bluetooth link. The next session waits until the current one is idle or disconnected.
 
-Order, because LoRa, Device, Position, and Display reboot on save and Channel does not:
+Order, because the name, LoRa, Device, Position, and Display reboot on save and Channel does not:
 
 1. Connect and PhoneAPI handshake (`wantConfig`, drain FromRadio, seed `session_passkey`).
 2. Ensure the fleet key is in the Keychain.
-3. LoRa — preset ShortTurbo, Ignore MQTT, frequency slot from the profile (50 on the TAK template), region from the profile. Then reboot and reconnect.
-4. Device — role chosen for this radio, rebroadcast LOCAL_ONLY, optional POSIX time zone. Then reboot and reconnect.
-5. Position — smart position from the profile, `ALTITUDE` and `GEOIDAL_SEPARATION`, **not** `ALTITUDE_MSL`. Then reboot and reconnect.
-6. Display — imperial or metric from the profile. Then reboot and reconnect.
-7. Channel — remove the default LongFast/ShortFast primary, write the private primary (name, 32-byte key, precise location, uplink and downlink), and **Send**. No reboot.
-8. Read back and require every TAK check in `ProfileAcceptance.evaluate`.
-9. Disconnect. Show pass or fail. Failed checks are ids and labels only.
+3. Name — `set_owner` for this radio only. The **long name** is the callsign ATAK shows. The **short name** is the 4-character mesh badge (blank uses the first 4 characters of the long name). Then reboot and reconnect.
+4. LoRa — preset ShortTurbo, Ignore MQTT, frequency slot from the profile (50 on the TAK template), region from the profile. Then reboot and reconnect.
+5. Device — role chosen for this radio, rebroadcast LOCAL_ONLY, optional POSIX time zone. Then reboot and reconnect.
+6. Position — smart position from the profile, `ALTITUDE` and `GEOIDAL_SEPARATION`, **not** `ALTITUDE_MSL`. Then reboot and reconnect.
+7. Display — imperial or metric from the profile. Then reboot and reconnect.
+8. Channel — remove the default LongFast/ShortFast primary, write the private primary (name, 32-byte key, precise location, uplink and downlink), and **Send**. No reboot.
+9. Read back and require every TAK check in `ProfileAcceptance.evaluate`, including that the long name matches what was entered.
+10. Disconnect. Show pass or fail. Failed checks are ids and labels only. A successful verify stores that long name and short name on the device roster.
 
 Full checklist and timeouts: [docs/APPLY_VERIFY.md](docs/APPLY_VERIFY.md). Screen contract: [docs/SCREENS_UX.md](docs/SCREENS_UX.md).
 
@@ -98,13 +99,13 @@ Live apply encodes and decodes the Meshtastic PhoneAPI admin subset in `MeshConf
 
 The field numbers match [meshtastic/protobufs](https://github.com/meshtastic/protobufs) commit `ad0bf31e82886d794334dcc62abb80da862a8ec7` (master, 2026-09-25). This repo does not vendor the protobuf tree or generated SwiftProtobuf sources. The codec keeps unknown fields inside a config body so a `set_config` does not wipe settings the profile does not own (for example LoRa transmit enable).
 
-Handshake writes `ToRadio.want_config_id` **69420** (firmware’s config-only nonce, so the node database is not downloaded), drains FromRadio until `config_complete_id` matches, then sends `AdminMessage.get_owner_request` to seed the 8-byte `session_passkey`. Mutating admin messages include that passkey. It stays in memory for the connection and is never logged.
+Handshake writes `ToRadio.want_config_id` **69420** (firmware’s config-only nonce, so the node database is not downloaded), drains FromRadio until `config_complete_id` matches, then sends `AdminMessage.get_owner_request` to seed the 8-byte `session_passkey`. Mutating admin messages include that passkey. It stays in memory for the connection and is never logged. The owner record from that reply is kept only so the later `set_owner` can change the long and short names without clearing the node id, public key, or license flag.
 
-LoRa, device, position, and display are each `set_config`. Channel is last: one `set_channel` of the primary (index 0, 32-byte key, precise location = 32 position bits) which saves without a reboot. Mutating admin messages set `want_response`. Firmware answers with a `Routing` packet (`error_reason` NONE, `request_id` equal to the packet id) after AdminModule accepts the write. A Bluetooth `want_ack` alone is not treated as success, because that ack can be generated before the admin module runs.
+The first mutating write is `set_owner` (`AdminMessage` field 32, `User.long_name` / `User.short_name`). Current firmware saves that and reboots. The long name is limited to 24 UTF-8 bytes. The short name is limited to 4 UTF-8 bytes. LoRa, device, position, and display are each `set_config`. Channel is last: one `set_channel` of the primary (index 0, 32-byte key, precise location = 32 position bits) which saves without a reboot. Mutating admin messages set `want_response`. Firmware answers with a `Routing` packet (`error_reason` NONE, `request_id` equal to the packet id) after AdminModule accepts the write. A Bluetooth `want_ack` alone is not treated as success, because that ack can be generated before the admin module runs.
 
 Current firmware applies LoRa changes live and does not reboot for a units-only display write. Role, rebroadcast, and position changes still drop Bluetooth. If a config section stays connected after the routing ack, the transport sends `reboot_seconds` so the apply loop can reconnect and continue. Channel does not.
 
-Read-back uses `get_config` and `get_channel` for the checklist fields in `ProfileAcceptance`.
+Read-back uses `get_owner`, `get_config`, and `get_channel` for the checklist fields in `ProfileAcceptance`. The long-name row must match the name entered for this radio.
 
 To regenerate after a protobuf change: check out that commit or a newer `meshtastic/protobufs` master, diff `meshtastic/mesh.proto`, `admin.proto`, `config.proto`, `channel.proto`, and `portnums.proto` against the constants in `PhoneAPICodec.swift`, and update the codec. `PhoneAPICodec.selfCheck()` compares a few frames to bytes produced by `protoc` for this commit; a handshake refuses to write if that check fails.
 

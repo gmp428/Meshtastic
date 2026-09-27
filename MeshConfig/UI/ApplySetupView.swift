@@ -15,6 +15,8 @@ struct ApplySetupView: View {
 
     @State private var selectedProfileID: UUID?
     @State private var role: DeviceRole?
+    @State private var longNameText = ""
+    @State private var shortNameText = ""
     @State private var preferredPeripheralID: UUID?
     @State private var rosterDeviceID: UUID?
     @State private var path = NavigationPath()
@@ -65,12 +67,35 @@ struct ApplySetupView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                Section {
+                    TextField("Long name", text: $longNameText)
+                        .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled()
+                    TextField("Short name", text: $shortNameText, prompt: Text("First 4 characters"))
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                    if let names = resolvedNames {
+                        Text("ATAK shows \(names.longName). The mesh badge is \(names.shortName).")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else if let nameProblem {
+                        Text(nameProblem)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                } header: {
+                    Text("Name on TAK")
+                } footer: {
+                    Text("The long name is the Meshtastic name ATAK shows as this radio’s callsign. It is required, and it is chosen for this radio only. The short name is the 4-character badge on the mesh screen. Leave it blank to use the first 4 characters of the long name.")
+                }
                 if !roster.devices.isEmpty {
                     Section("Pick from roster") {
                         ForEach(roster.devices) { device in
                             Button {
                                 selectedProfileID = device.profileID
                                 role = device.role
+                                longNameText = device.longName ?? ""
+                                shortNameText = device.shortName ?? ""
                                 preferredPeripheralID = device.peripheralID
                                 rosterDeviceID = device.id
                             } label: {
@@ -164,6 +189,8 @@ struct ApplySetupView: View {
                 guard let prefill, driver.isReadyForNextRadio else { return }
                 selectedProfileID = prefill.profileID
                 role = prefill.role
+                longNameText = prefill.longName ?? ""
+                shortNameText = prefill.shortName ?? ""
                 preferredPeripheralID = prefill.peripheralID
                 rosterDeviceID = prefill.rosterDeviceID
                 path = NavigationPath()
@@ -189,8 +216,28 @@ struct ApplySetupView: View {
     private var canScan: Bool {
         // `generation` publishes session transitions so this gate refreshes.
         _ = driver.generation
-        guard driver.isReadyForNextRadio, let profile = selectedProfile, role != nil else { return false }
+        guard driver.isReadyForNextRadio, let profile = selectedProfile, role != nil, resolvedNames != nil else {
+            return false
+        }
         return !profile.channel.isDisallowedPrimaryName
+    }
+
+    private var resolvedNames: RadioNames? {
+        try? RadioNames.resolve(longName: longNameText, shortName: shortNameText)
+    }
+
+    private var nameProblem: String? {
+        let longBlank = longNameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let shortBlank = shortNameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if longBlank && shortBlank { return nil }
+        do {
+            _ = try RadioNames.resolve(longName: longNameText, shortName: shortNameText)
+            return nil
+        } catch let problem as RadioNames.Problem {
+            return problem.errorDescription
+        } catch {
+            return "Enter the long name for this radio."
+        }
     }
 
     private var errorPresented: Binding<Bool> {
@@ -203,7 +250,8 @@ struct ApplySetupView: View {
     private func startScan() async {
         guard let profile = selectedProfile, let role else { return }
         do {
-            try await driver.beginScan(profile: profile, role: role, rosterDeviceID: rosterDeviceID)
+            let names = try RadioNames.resolve(longName: longNameText, shortName: shortNameText)
+            try await driver.beginScan(profile: profile, role: role, names: names, rosterDeviceID: rosterDeviceID)
             library.rememberLastUsed(profile.id)
             didPushResult = false
             path.append(ApplyRoute.scan)
@@ -220,6 +268,8 @@ struct ApplySetupView: View {
 
     private func clearRoleAndReturn() {
         role = nil
+        longNameText = ""
+        shortNameText = ""
         preferredPeripheralID = nil
         rosterDeviceID = nil
         didPushResult = false
@@ -331,6 +381,11 @@ struct ApplyProgressView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(session.profile.name)
                         .font(.headline)
+                    Text(session.longName)
+                        .font(.body)
+                    Text("Mesh badge \(session.shortName)")
+                        .font(.subheadline.monospaced())
+                        .foregroundStyle(.secondary)
                     RoleChip(role: session.role)
                     ProgressView(value: Double(doneCount), total: Double(steps.count))
                         .padding(.top, 4)
@@ -467,6 +522,8 @@ struct ApplyStepRow: Identifiable {
             return "PhoneAPI handshake"
         case .ensuringPSK:
             return "Checking the Keychain"
+        case .applying(.owner):
+            return "Writing the TAK long name and mesh badge"
         case .applying(.channel):
             return "Replacing the default primary and sending the channel"
         case .applying:
@@ -502,6 +559,8 @@ struct ApplyResultView: View {
                     .font(.title2.bold())
                 VStack(alignment: .leading, spacing: 8) {
                     LabeledContent("Radio", value: outcome.deviceName)
+                    LabeledContent("Long name", value: outcome.longName)
+                    LabeledContent("Short name", value: outcome.shortName)
                     LabeledContent("Profile", value: outcome.profileName)
                     LabeledContent("Role") {
                         RoleChip(role: outcome.role)

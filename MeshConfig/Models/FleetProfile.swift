@@ -282,7 +282,7 @@ struct ProfileApplyPlan: Sendable {
         ProfileApplyPlan(
             profile: profile,
             roleForThisDevice: role,
-            expectRebootAfter: [.lora, .device, .position, .display]
+            expectRebootAfter: [.owner, .lora, .device, .position, .display]
         )
     }
 }
@@ -307,6 +307,8 @@ struct DeviceSnapshot: Sendable {
     var rebroadcastMode: RebroadcastMode?
     var smartPosition: Bool?
     var positionFlags: PositionFlagSet?
+    /// Meshtastic `User.long_name` read back from the radio.
+    var longName: String?
 }
 
 /// One TAK verify row. A named type so checklists can live in `Equatable` results.
@@ -326,13 +328,19 @@ enum ProfileAcceptance {
         ("ch.psk", "Primary PSK is non-default AES-256"),
         ("ch.precise", "Precise location is on"),
         ("dev.role", "Role is TAK or TAK_TRACKER as chosen at apply"),
+        ("owner.longName", "Long name matches the TAK callsign entered at apply"),
         ("dev.rebroadcast", "Rebroadcast is LOCAL_ONLY"),
         ("pos.smart", "Smart Position matches profile (on for ops)"),
         ("pos.hae", "Position flags: ALTITUDE on, ALTITUDE_MSL off"),
         ("pos.geoid", "GEOIDAL_SEPARATION on when profile requests it"),
     ]
 
-    static func evaluate(profile: FleetProfile, snap: DeviceSnapshot, appliedRole: DeviceRole) -> [VerifyCheckResult] {
+    static func evaluate(
+        profile: FleetProfile,
+        snap: DeviceSnapshot,
+        appliedRole: DeviceRole,
+        appliedLongName: String
+    ) -> [VerifyCheckResult] {
         [
             VerifyCheckResult(id: "lora.preset", label: "LoRa preset is ShortTurbo", ok: snap.modemPreset == .shortTurbo),
             VerifyCheckResult(id: "lora.mqtt", label: "Ignore MQTT is on", ok: snap.ignoreMQTT == true),
@@ -344,6 +352,11 @@ enum ProfileAcceptance {
             VerifyCheckResult(id: "ch.psk", label: "Primary PSK is non-default AES-256", ok: snap.primaryHasNonDefaultPSK == true),
             VerifyCheckResult(id: "ch.precise", label: "Precise location is on", ok: snap.preciseLocation == true),
             VerifyCheckResult(id: "dev.role", label: "Role matches apply choice", ok: snap.role == appliedRole),
+            VerifyCheckResult(
+                id: "owner.longName",
+                label: "Long name matches the TAK callsign",
+                ok: snap.longName == appliedLongName && !appliedLongName.isEmpty
+            ),
             VerifyCheckResult(id: "dev.rebroadcast", label: "Rebroadcast is LOCAL_ONLY", ok: snap.rebroadcastMode == .localOnly),
             VerifyCheckResult(id: "pos.smart", label: "Smart Position matches profile", ok: snap.smartPosition == profile.position.smartPosition),
             VerifyCheckResult(id: "pos.hae", label: "Altitude is HAE path (not MSL)", ok: snap.positionFlags?.isTAKAltitudeCorrect == true),

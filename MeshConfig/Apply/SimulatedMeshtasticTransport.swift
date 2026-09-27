@@ -21,6 +21,8 @@ final class SimulatedMeshtasticTransport: FleetRadioTransport {
     private var wroteChannelName: String?
     private var wrotePreciseLocation: Bool?
     private var wrotePSKByteCount: Int?
+    private var wroteLongName: String?
+    private var wroteShortName: String?
 
     func startScan() async {
         onBluetoothBlocked?(nil)
@@ -92,6 +94,16 @@ final class SimulatedMeshtasticTransport: FleetRadioTransport {
         _ = settings
     }
 
+    func setOwner(longName: String, shortName: String) async throws {
+        try requireLink()
+        guard !longName.isEmpty, !shortName.isEmpty else {
+            throw MeshtasticBLEError.adminFailed("The long name and short name are required.")
+        }
+        try await pause()
+        wroteLongName = longName
+        wroteShortName = shortName
+    }
+
     func setPrimaryChannel(_ settings: ChannelSettings, psk: Data) async throws {
         try requireLink()
         guard psk.count == 32 else { throw MeshtasticBLEError.invalidPSKLength }
@@ -115,7 +127,8 @@ final class SimulatedMeshtasticTransport: FleetRadioTransport {
             role: wroteRole,
             rebroadcastMode: wroteDevice?.rebroadcastMode,
             smartPosition: wrotePosition?.smartPosition,
-            positionFlags: wrotePosition?.flags
+            positionFlags: wrotePosition?.flags,
+            longName: wroteLongName
         )
     }
 

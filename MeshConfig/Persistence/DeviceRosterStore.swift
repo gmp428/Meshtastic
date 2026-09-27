@@ -22,6 +22,7 @@ final class DeviceRosterStore: ObservableObject {
         profileID: UUID,
         role: DeviceRole,
         status: DeviceConfigStatus,
+        names: RadioNames?,
         simulatedNote: Bool
     ) {
         let matchIndex = devices.firstIndex { device in
@@ -31,10 +32,16 @@ final class DeviceRosterStore: ObservableObject {
         }
 
         if let matchIndex {
-            devices[matchIndex].displayName = displayName
             devices[matchIndex].peripheralID = peripheralID ?? devices[matchIndex].peripheralID
             devices[matchIndex].profileID = profileID
             devices[matchIndex].role = role
+            if status == .configured, let names {
+                devices[matchIndex].longName = names.longName
+                devices[matchIndex].shortName = names.shortName
+                devices[matchIndex].displayName = names.longName
+            } else if devices[matchIndex].longName == nil {
+                devices[matchIndex].displayName = displayName
+            }
             switch status {
             case .configured:
                 devices[matchIndex].markConfigured()
@@ -48,11 +55,14 @@ final class DeviceRosterStore: ObservableObject {
             if simulatedNote {
                 notes = "Simulated DEBUG session. Not a real radio."
             }
+            let appliedNames = status == .configured ? names : nil
             var created = ConfiguredDevice(
                 peripheralID: peripheralID,
-                displayName: displayName,
+                displayName: appliedNames?.longName ?? displayName,
                 profileID: profileID,
                 role: role,
+                longName: appliedNames?.longName,
+                shortName: appliedNames?.shortName,
                 notes: notes
             )
             switch status {

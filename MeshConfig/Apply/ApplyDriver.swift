@@ -9,6 +9,8 @@ struct ApplyOutcome: Equatable {
     var profileName: String
     var profileID: UUID
     var role: DeviceRole
+    var longName: String
+    var shortName: String
     var checklist: [VerifyCheckResult]
     var message: String
     var failedChecks: [String]
@@ -51,6 +53,7 @@ final class ApplyDriver: ObservableObject {
     func beginScan(
         profile: FleetProfile,
         role: DeviceRole,
+        names: RadioNames,
         rosterDeviceID: UUID?
     ) async throws {
         guard isReadyForNextRadio else { throw MeshApplyPrepError.sessionBusy }
@@ -64,7 +67,7 @@ final class ApplyDriver: ObservableObject {
         try FleetPSKStore.ensurePSK(for: &prepared)
         library?.replace(prepared)
 
-        let nextSession = ApplySession(profile: prepared, role: role)
+        let nextSession = ApplySession(profile: prepared, role: role, names: names)
         adopt(nextSession)
         discovered = []
         outcome = nil
@@ -128,7 +131,8 @@ final class ApplyDriver: ObservableObject {
                 radio: radio,
                 profile: current.profile,
                 role: current.role,
-                status: .failed
+                status: .failed,
+                names: nil
             )
         }
         await teardownConnection()
@@ -242,6 +246,8 @@ final class ApplyDriver: ObservableObject {
         guard let transport else { throw MeshtasticBLEError.notConnected }
         let profile = session.profile
         switch section {
+        case .owner:
+            try await transport.setOwner(longName: session.longName, shortName: session.shortName)
         case .lora:
             try await transport.setLoRa(profile.lora)
         case .device:
@@ -271,7 +277,8 @@ final class ApplyDriver: ObservableObject {
                 radio: radio,
                 profile: session.profile,
                 role: session.role,
-                status: outcome.passed ? .configured : .failed
+                status: outcome.passed ? .configured : .failed,
+                names: outcome.passed ? RadioNames(longName: session.longName, shortName: session.shortName) : nil
             )
         }
         await teardownConnection()
@@ -290,6 +297,8 @@ final class ApplyDriver: ObservableObject {
                 profileName: session.profile.name,
                 profileID: session.profile.id,
                 role: session.role,
+                longName: session.longName,
+                shortName: session.shortName,
                 checklist: session.lastChecklist,
                 message: "Configured",
                 failedChecks: []
@@ -304,6 +313,8 @@ final class ApplyDriver: ObservableObject {
                 profileName: session.profile.name,
                 profileID: session.profile.id,
                 role: session.role,
+                longName: session.longName,
+                shortName: session.shortName,
                 checklist: failedLabels.isEmpty ? session.lastChecklist : failedLabels,
                 message: failure.message,
                 failedChecks: failure.failedChecks
@@ -317,7 +328,8 @@ final class ApplyDriver: ObservableObject {
         radio: DiscoveredRadio,
         profile: FleetProfile,
         role: DeviceRole,
-        status: DeviceConfigStatus
+        status: DeviceConfigStatus,
+        names: RadioNames?
     ) {
         var existingID = rosterDeviceID
         if let candidate = existingID,
@@ -333,6 +345,7 @@ final class ApplyDriver: ObservableObject {
             profileID: profile.id,
             role: role,
             status: status,
+            names: names,
             simulatedNote: radio.isSimulated
         )
     }

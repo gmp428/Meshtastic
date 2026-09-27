@@ -10,6 +10,8 @@ enum AppTab: Hashable {
 struct ApplyPrefill: Equatable {
     var profileID: UUID
     var role: DeviceRole
+    var longName: String?
+    var shortName: String?
     var peripheralID: UUID?
     var rosterDeviceID: UUID
     var token: UUID

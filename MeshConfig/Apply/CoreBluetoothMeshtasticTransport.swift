@@ -49,6 +49,8 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
     private var deviceConfig: Data?
     private var positionConfig: Data?
     private var displayConfig: Data?
+    /// Last `User` body from get_owner. Merged into set_owner so id, keys, and license flags stay put.
+    private var ownerUser: Data?
     private let gate = NSLock()
 
     func startScan() async {
@@ -174,6 +176,9 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         if let key = owner?.passkey, key.count == 8 {
             adoptPasskey(key)
         }
+        if let user = owner?.owner, !user.isEmpty {
+            ownerUser = user
+        }
         guard sessionPasskey.count == 8 else {
             throw MeshtasticBLEError.adminFailed("The radio did not return an admin session passkey.")
         }
@@ -227,6 +232,26 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         }
     }
 
+    func setOwner(longName: String, shortName: String) async throws {
+        let longBytes = Data(longName.utf8)
+        let shortBytes = Data(shortName.utf8)
+        guard !longName.isEmpty, longBytes.count <= RadioNames.maxLongNameUTF8Bytes else {
+            throw MeshtasticBLEError.adminFailed("The long name must be 1 to 24 bytes.")
+        }
+        guard !shortName.isEmpty, shortBytes.count <= RadioNames.maxShortNameUTF8Bytes else {
+            throw MeshtasticBLEError.adminFailed("The short name must be 1 to 4 bytes.")
+        }
+        try await writeRebootingConfig {
+            let user = try PhoneAPICodec.userMessage(
+                merging: self.ownerUser ?? Data(),
+                longName: longName,
+                shortName: shortName
+            )
+            let admin = PhoneAPICodec.setOwnerAdmin(user: user, passkey: self.sessionPasskey)
+            _ = try await self.roundTrip(admin: admin, wantResponse: true, wantBody: false, linkDropSucceeds: true)
+        }
+    }
+
     func setPrimaryChannel(_ settings: ChannelSettings, psk: Data) async throws {
         try requireLink()
         guard psk.count == 32 else { throw MeshtasticBLEError.invalidPSKLength }
@@ -268,11 +293,13 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         let device = try await fetchConfig(.device)
         let position = try await fetchConfig(.position)
         let channel = try await fetchChannel()
+        let owner = try await fetchOwner()
         return try PhoneAPICodec.snapshot(
             lora: lora,
             device: device,
             position: position,
-            channel: channel
+            channel: channel,
+            owner: owner
         )
     }
 
@@ -394,6 +421,20 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         return config.body
     }
 
+    private func fetchOwner() async throws -> Data {
+        let admin = PhoneAPICodec.getOwnerAdmin(passkey: sessionPasskey)
+        guard let message = try await roundTrip(
+            admin: admin,
+            wantResponse: true,
+            wantBody: true,
+            linkDropSucceeds: false
+        ),
+              let owner = message.owner else {
+            throw MeshtasticBLEError.adminFailed("The radio did not return its long name.")
+        }
+        return owner
+    }
+
     private func fetchChannel() async throws -> PhoneAPICodec.ParsedChannel {
         let admin = PhoneAPICodec.getChannelAdmin(index: 0, passkey: sessionPasskey)
         guard let message = try await roundTrip(
@@ -464,7 +505,7 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
                 if let key = message.passkey, key.count == 8 {
                     adoptPasskey(key)
                 }
-                if wantBody && message.config == nil && message.channel == nil && message.passkey == nil {
+                if wantBody && message.config == nil && message.channel == nil && message.owner == nil && message.passkey == nil {
                     continue
                 }
                 return message
@@ -515,6 +556,12 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         deviceConfig = nil
         positionConfig = nil
         displayConfig = nil
+        if let indices = ownerUser?.indices {
+            for index in indices {
+                ownerUser?[index] = 0
+            }
+        }
+        ownerUser = nil
     }
 
     private func noticeSuffix(_ message: String) -> String {

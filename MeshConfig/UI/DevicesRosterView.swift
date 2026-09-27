@@ -12,8 +12,15 @@ struct DevicesRosterView: View {
                     NavigationLink(value: device.id) {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
-                                Text(device.displayName)
+                                Text(device.longName ?? device.displayName)
                                     .font(.headline)
+                                if let shortName = device.shortName {
+                                    Text(shortName)
+                                        .font(.caption.monospaced())
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(.quaternary, in: Capsule())
+                                }
                                 Spacer()
                                 StatusBadge(status: device.lastStatus)
                             }
@@ -122,7 +129,12 @@ struct DeviceDetailView: View {
             if let device {
                 Form {
                     Section {
-                        LabeledContent("Radio", value: device.displayName)
+                        LabeledContent("Radio", value: device.longName ?? device.displayName)
+                        LabeledContent("Long name", value: device.longName ?? "Not applied yet")
+                        LabeledContent("Short name", value: device.shortName ?? "Not applied yet")
+                        Text("Long name is the callsign ATAK shows. Short name is the 4-character mesh badge. Change them by re-applying this radio.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                         StatusBadge(status: device.lastStatus)
                         if let peripheralID = device.peripheralID {
                             LabeledContent("Bluetooth id") {
@@ -168,7 +180,7 @@ struct DeviceDetailView: View {
                         .disabled(library.profile(id: device.profileID) == nil || !driver.isReadyForNextRadio)
                     } footer: {
                         Text(driver.isReadyForNextRadio
-                             ? "Opens Apply with this profile and role filled in. You still confirm before connect. Nothing is written until you pick the radio."
+                             ? "Opens Apply with this profile, role, and names filled in. You still confirm before connect. Nothing is written until you pick the radio."
                              : "A radio is already connected. Cancel or finish that session before re-applying.")
                     }
                 }
@@ -232,6 +244,8 @@ struct DeviceDetailView: View {
         navigation.applyPrefill = ApplyPrefill(
             profileID: device.profileID,
             role: device.role,
+            longName: device.longName,
+            shortName: device.shortName,
             peripheralID: device.peripheralID,
             rosterDeviceID: device.id,
             token: UUID()

@@ -20,17 +20,18 @@ enum ApplySessionState: Equatable, Sendable {
 }
 
 enum ApplySection: String, Codable, CaseIterable, Sendable {
-    case lora, device, position, display, channel
+    case owner, lora, device, position, display, channel
 
     var expectsReboot: Bool {
         switch self {
-        case .lora, .device, .position, .display: return true
+        case .owner, .lora, .device, .position, .display: return true
         case .channel: return false
         }
     }
 
     var displayName: String {
         switch self {
+        case .owner: return "Name"
         case .lora: return "LoRa"
         case .device: return "Device"
         case .position: return "Position"
@@ -41,6 +42,7 @@ enum ApplySection: String, Codable, CaseIterable, Sendable {
 
     var progressTitle: String {
         switch self {
+        case .owner: return "TAK long name"
         case .lora: return "LoRa"
         case .device: return "Device role + rebroadcast"
         case .position: return "Position"
@@ -62,8 +64,8 @@ struct ApplySessionConfig: Sendable {
     var writeAckTimeout: TimeInterval = 10
     var rebootGrace: TimeInterval = 20
     var reconnectTimeout: TimeInterval = 30
-    /// Default order: reboot sections first, channel last (Send, no reboot), then verify.
-    var sectionOrder: [ApplySection] = [.lora, .device, .position, .display, .channel]
+    /// Default order: name, then reboot sections, channel last (Send, no reboot), then verify.
+    var sectionOrder: [ApplySection] = [.owner, .lora, .device, .position, .display, .channel]
 }
 
 /// Orchestrates scan → connect → handshake → ensure PSK → apply → verify → disconnect.
@@ -76,6 +78,10 @@ final class ApplySession: ObservableObject {
 
     let profile: FleetProfile
     let role: DeviceRole
+    /// Meshtastic long name for this radio. TAK shows this as the callsign.
+    let longName: String
+    /// Meshtastic short name for this radio. The 4-character mesh badge.
+    let shortName: String
     let config: ApplySessionConfig
 
     /// Section that triggered the reboot we are reconnecting after.
@@ -87,9 +93,16 @@ final class ApplySession: ObservableObject {
 
     var orderedSections: [ApplySection] { sections }
 
-    init(profile: FleetProfile, role: DeviceRole, config: ApplySessionConfig = .init()) {
+    init(
+        profile: FleetProfile,
+        role: DeviceRole,
+        names: RadioNames,
+        config: ApplySessionConfig = .init()
+    ) {
         self.profile = profile
         self.role = role
+        self.longName = names.longName
+        self.shortName = names.shortName
         self.config = config
     }
 
@@ -177,7 +190,12 @@ final class ApplySession: ObservableObject {
 
     func onVerified(snapshot: DeviceSnapshot) {
         guard state == .verifying else { return }
-        let results = ProfileAcceptance.evaluate(profile: profile, snap: snapshot, appliedRole: role)
+        let results = ProfileAcceptance.evaluate(
+            profile: profile,
+            snap: snapshot,
+            appliedRole: role,
+            appliedLongName: longName
+        )
         lastChecklist = results
         if results.allSatisfy(\.ok) {
             state = .succeeded
@@ -256,6 +274,8 @@ protocol MeshtasticBLETransport: AnyObject {
     func setDevice(role: DeviceRole, settings: DeviceSettings) async throws
     func setPosition(_ settings: PositionSettings) async throws
     func setDisplay(_ settings: DisplaySettings) async throws
+    /// `AdminMessage.set_owner` with session_passkey. Long name is the TAK callsign; short name is the mesh badge.
+    func setOwner(longName: String, shortName: String) async throws
     /// Replace default primary if needed; write ChannelSettings including 32-byte PSK; Send to device.
     func setPrimaryChannel(_ settings: ChannelSettings, psk: Data) async throws
     func readSnapshot() async throws -> DeviceSnapshot

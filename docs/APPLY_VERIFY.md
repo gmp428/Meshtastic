@@ -5,6 +5,7 @@
 - **One active BLE connection.** Never connect a second radio until the current session reaches `disconnected` (success or failed-and-cleaned-up).
 - **Same `FleetProfile` + Keychain PSK** for every radio that should share the mesh.
 - **Role is chosen per device** at session start: `TAK` (phone + ATAK/iTAK) vs `TAK_TRACKER` (standalone).
+- **Names are chosen per device** at session start. They are not a fleet-wide setting. **Long name** is the Meshtastic name ATAK shows as the callsign / PLI name (24 UTF-8 bytes). **Short name** is the 4-byte mesh badge. Blank short name uses the first 4 characters of the long name that fit in 4 UTF-8 bytes.
 - PSK bytes leave Keychain only for the Channel write; never log them.
 - Heltec V3 / T114 / T1000-E: BLE config path is the same; do not assume Wi‑Fi on T114.
 
@@ -14,6 +15,8 @@
 | --- | --- |
 | Profile | Selected `FleetProfile` |
 | Role | Explicit picker (default = `profile.defaultRole`) |
+| Long name | Required text for this radio. TAK callsign. Not stored on the profile. |
+| Short name | Optional. Blank derives the first 4 characters of the long name. |
 | Peripheral | User picks from scan (Meshtastic service UUID) |
 | PSK | `FleetPSKStore.ensurePSK` then `loadPSKData` |
 
@@ -25,6 +28,9 @@ idle
   → connecting
   → ensuringPSK
   → readingBaseline          # optional; useful for “what was here”
+  → applyingOwner            # set_owner long_name + short_name; expect reboot
+  → waitingReboot(owner)
+  → reconnecting
   → applyingLoRa             # expect reboot
   → waitingReboot(lora)
   → reconnecting
@@ -49,6 +55,13 @@ idle
 Batching note: if the Meshtastic BLE stack lets you set multiple Config sections before one reboot, the implementer may coalesce LoRa+Device+Position+Display into fewer reboot cycles — acceptance is identical. Default of this spec is **one section → wait reconnect** for predictable progress UI and easier failure isolation.
 
 ## Per-section writes (protobuf intent)
+
+### Owner (`User` via `AdminMessage.set_owner`)
+- After handshake has seeded `session_passkey`
+- `long_name` = the name entered for this radio (TAK callsign)
+- `short_name` = the badge entered, or the derived 4-character badge
+- Preserve the rest of the `User` returned by `get_owner` (node id, public key, license flag)
+- Current firmware saves owner changes and reboots. Wait for the link to drop, then handshake again.
 
 ### LoRa (`Config.LoRa`)
 - `use_preset = true`
@@ -97,19 +110,20 @@ After channel Send, read back and require **all** TAK checks green:
 5. Primary PSK non-default (length/entropy check or “not default key” flag — **do not compare by logging bytes**)  
 6. Precise location on  
 7. Role matches session choice  
-8. Rebroadcast LOCAL_ONLY  
-9. Smart Position matches profile  
-10. Position flags: ALTITUDE on, ALTITUDE_MSL off  
-11. GEOIDAL_SEPARATION matches profile  
+8. Long name matches the callsign entered for this radio  
+9. Rebroadcast LOCAL_ONLY  
+10. Smart Position matches profile  
+11. Position flags: ALTITUDE on, ALTITUDE_MSL off  
+12. GEOIDAL_SEPARATION matches profile  
 
 Any fail → `failed` with checklist; stay connected only long enough to show diffs, then disconnect.
 
 ## Fleet loop UX (contract)
 
-1. User selects profile → picks role for **this** device → Scan.  
+1. User selects profile → picks role, long name, and optional short name for **this** device → Scan.  
 2. Connect → apply → verify → show pass/fail.  
-3. Disconnect.  
-4. Prompt: **Next device** (same profile + ask role again) or **Done**.  
+3. Disconnect. On success, store the applied long name and short name on the roster row.  
+4. Prompt: **Next device** (same profile + ask role and name again) or **Done**.  
 5. Never auto-scan-connect the next radio without an explicit tap (avoids wrong-board flash of config).
 
 ## Out of scope for this flow
@@ -139,7 +153,7 @@ Characteristics (Meshtastic Client API):
 2. `ToRadio.wantConfigID` (nonce)  
 3. Drain `FromRadio` until config-complete  
 4. Seed **session_passkey** (e.g. `AdminMessage.get_owner_request` with `want_response`; newer firmware requires passkey on mutating admin)  
-5. Only then `set_config` / `set_channel`
+5. Only then `set_owner` / `set_config` / `set_channel`
 
 ### Mutating admin
 
