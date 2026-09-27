@@ -133,7 +133,10 @@ struct ApplySetupView: View {
                     .frame(maxWidth: .infinity)
                     .disabled(!canScan)
                 } footer: {
-                    Text("Mesh Config connects to one radio, applies the profile, verifies the read-back, then disconnects. The next radio is never opened automatically.")
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Mesh Config connects to one radio, applies the profile, verifies the read-back, then disconnects. The next radio is never opened automatically.")
+                        Text(AppVersion.display)
+                    }
                 }
             }
             .navigationTitle("Apply")

@@ -16,6 +16,10 @@ Requirements: Xcode 15 or later, iOS 17 or later, an iPhone or the iPhone simula
 4. Set your signing team on the Mesh Config target if you run on a device. The bundle id is `com.meshconfig.app`.
 5. Run.
 
+The Mesh Config target is **1.1.0 (2)**: `MARKETING_VERSION` is the short version, `CURRENT_PROJECT_VERSION` is the build number. Settings shows `Version 1.1.0 (2)` from the app bundle, and the Apply screen repeats that line. After you pull and Run, those screens should show this number.
+
+Bump both values on every shippable change so a TestFlight or device install can be told apart from the last one. Raise `CURRENT_PROJECT_VERSION` by 1 each time, in both the Debug and Release configurations. Raise `MARKETING_VERSION` when you want a new short version (1.1.0, then 1.2.0). Do not type the number into Swift; Settings and Apply read `CFBundleShortVersionString` and `CFBundleVersion`.
+
 Bluetooth permission is requested when you scan. The usage string is `NSBluetoothAlwaysUsageDescription` in `MeshConfig/Info.plist`.
 
 A Linux checkout cannot run `xcodebuild`. The project file is still a normal Xcode project (`project.pbxproj`, shared scheme, Swift sources).
@@ -33,7 +37,7 @@ Release builds only include the CoreBluetooth transport.
 | Profiles | Saved fleet profiles. New profiles start from the TAK Tracker defaults. |
 | Devices | Radios this phone has applied, or last attempted. |
 | Apply | Pick a profile, pick a role, scan, apply, verify, then next radio or done. |
-| Settings | Default region and display units for new profiles, last profile, and the limits below. |
+| Settings | Installed version, default region and display units for new profiles, last profile, and the limits below. |
 
 Role is asked for every radio:
 

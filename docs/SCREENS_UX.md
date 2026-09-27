@@ -62,6 +62,7 @@ Sections matching the model: LoRa, Channel, Device defaults, Position, Display, 
 3. Short help under role (from `DeviceRole.shortHelp`)
 4. **Name on TAK** — required **long name** (the Meshtastic name ATAK shows as this radio’s callsign) and optional **short name** (the 4-character mesh badge). Blank short name uses the first 4 characters of the long name. These are per radio, not a fleet setting.
 5. Primary: **Scan for radios**
+6. Footer shows the same bundle version as Settings (`Version <short> (<build>)`)
 
 Gate: cannot scan until profile, role, and a valid long name are set.
 
@@ -121,6 +122,7 @@ Footer: Cancel → disconnect, mark failed “cancelled”, return to setup.
 
 ## 5. Settings
 
+- Version at the top, read from the app bundle: `Version <MARKETING_VERSION> (<CURRENT_PROJECT_VERSION>)`
 - Default region (US)
 - Default display units
 - Last profile id
