@@ -66,7 +66,7 @@ struct ProfileEditorView: View {
                     Text(DeviceRole.takTracker.displayName).tag(DeviceRole.takTracker)
                     Text(DeviceRole.tak.displayName).tag(DeviceRole.tak)
                 }
-                LabeledContent("Rebroadcast", value: "LOCAL_ONLY")
+                LabeledContent("Rebroadcast", value: "ALL")
                 TextField("Time zone (optional POSIX TZ)", text: timezoneText)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()

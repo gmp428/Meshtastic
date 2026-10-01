@@ -529,6 +529,7 @@ enum SyncDiff {
         case 2: return "LOCAL_ONLY"
         case 3: return "KNOWN_ONLY"
         case 4: return "NONE"
+        case 5: return "CORE_PORTNUMS_ONLY"
         default: return String(value)
         }
     }
@@ -619,7 +620,7 @@ enum SyncDiff {
             device: RawProto.message([
                 (11, .bytes(zone)),
                 (7, .varint(0)),
-                (6, .varint(2)),
+                (6, .varint(0)),
                 (1, .varint(10)),
             ]),
             position: RawProto.message([
@@ -764,6 +765,7 @@ enum SyncDiff {
         guard zeroPlan.changes.isEmpty else { return "zero-units" }
 
         if let problem = try trackerMQTTCheck(profile: profile, psk: psk) { return problem }
+        if let problem = try rebroadcastCheck(profile: profile, psk: psk) { return problem }
         if let problem = try gatewayCheck(profile: profile, psk: psk) { return problem }
         return nil
     }
@@ -829,6 +831,81 @@ enum SyncDiff {
             mqttPassword: Data()
         )
         guard again.changes.isEmpty, again.writes.isEmpty else { return "tracker-second" }
+        return nil
+    }
+
+    /// CORE_PORTNUMS_ONLY (protobuf 5) drops ATAK_PLUGIN. Trackers and gateways both write ALL.
+    private static func rebroadcastCheck(profile: FleetProfile, psk: Data) throws -> String? {
+        var deviceFields = try PhoneAPICodec.parse(
+            PhoneAPICodec.deviceConfig(merging: Data(), role: .takTracker, settings: profile.device)
+        )
+        PhoneAPICodec.upsertVarint(&deviceFields, 6, 5, force: true)
+        let inventory = RadioInventory(
+            lora: try PhoneAPICodec.loraConfig(merging: Data(), settings: profile.lora),
+            device: PhoneAPICodec.serialize(deviceFields),
+            position: try PhoneAPICodec.positionConfig(merging: Data(), settings: profile.position),
+            display: try PhoneAPICodec.displayConfig(merging: Data(), settings: profile.display),
+            owner: try PhoneAPICodec.userMessage(merging: Data(), longName: "Tracker", shortName: "Trk"),
+            longName: "Tracker",
+            shortName: "Trk",
+            channels: [try PhoneAPICodec.channelMessage(
+                name: profile.channel.name,
+                psk: psk,
+                uplink: true,
+                downlink: true,
+                preciseLocation: true,
+                channelID: 0x11223344
+            )],
+            observedConfigFields: [1, 2, 5, 6],
+            observedModuleFields: []
+        )
+        let plan = try SyncDiff.plan(
+            inventory: inventory,
+            profile: profile,
+            role: .takTracker,
+            names: RadioNames(longName: nil, shortName: nil),
+            longEdited: false,
+            shortEdited: false,
+            psk: psk,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
+        )
+        guard plan.changes.map(\.id) == ["device.rebroadcast"] else { return "rebroadcast-id" }
+        guard plan.changes.first?.detail == "CORE_PORTNUMS_ONLY → ALL" else { return "rebroadcast-detail" }
+        guard plan.writes.count == 1, case .config(.device, _) = plan.writes.first else { return "rebroadcast-write" }
+        let updated = try inventory.applying(plan.writes)
+        let again = try SyncDiff.plan(
+            inventory: updated,
+            profile: profile,
+            role: .takTracker,
+            names: RadioNames(longName: nil, shortName: nil),
+            longEdited: false,
+            shortEdited: false,
+            psk: psk,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
+        )
+        guard again.changes.isEmpty, again.writes.isEmpty else { return "rebroadcast-second" }
+        let gateway = try SyncDiff.plan(
+            inventory: inventory,
+            profile: profile,
+            role: .client,
+            names: RadioNames(longName: nil, shortName: nil),
+            longEdited: false,
+            shortEdited: false,
+            psk: psk,
+            function: .gateway,
+            wifiSSID: "OTS-Shop",
+            wifiPSK: Data("wifi-secret".utf8),
+            mqttPassword: Data("mqtt-secret".utf8)
+        )
+        guard gateway.changes.contains(where: { $0.id == "device.rebroadcast" && $0.detail == "CORE_PORTNUMS_ONLY → ALL" }) else {
+            return "rebroadcast-gateway"
+        }
         return nil
     }
 

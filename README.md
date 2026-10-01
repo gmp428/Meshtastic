@@ -2,7 +2,7 @@
 
 iPhone app for configuring a Meshtastic fleet one radio at a time over Bluetooth. You save a fleet profile on the phone, pick a role for the radio in front of you, apply the whole profile, verify the read-back, disconnect, then move to the next radio.
 
-The primary profile is the TAK tracker / ATAK-over-Meshtastic setup: ShortTurbo, Ignore MQTT off, Ok to MQTT on, hop limit 3, transmit on, frequency slot 50, a private primary channel with uplink and downlink, rebroadcast LOCAL_ONLY, and position flags that give TAK height above ellipsoid (HAE) rather than mean sea level. Each radio is a Tracker or a Gateway. Trackers keep the MQTT module off. The gateway is a CLIENT that joins Wi-Fi and publishes the fleet to OpenTAKServer.
+The primary profile is the TAK tracker / ATAK-over-Meshtastic setup: ShortTurbo, Ignore MQTT off, Ok to MQTT on, hop limit 3, transmit on, frequency slot 50, a private primary channel with uplink and downlink, rebroadcast ALL, and position flags that give TAK height above ellipsoid (HAE) rather than mean sea level. Each radio is a Tracker or a Gateway. Trackers keep the MQTT module off. The gateway is a CLIENT that joins Wi-Fi and publishes the fleet to OpenTAKServer.
 
 This repository is the Mesh Config app. It is not the Meshtastic firmware tree.
 
@@ -16,7 +16,7 @@ Requirements: Xcode 15 or later, iOS 17 or later, an iPhone or the iPhone simula
 4. Set your signing team on the Mesh Config target if you run on a device. The bundle id is `com.meshconfig.app`.
 5. Run.
 
-The Mesh Config target is **1.3.0 (6)**: `MARKETING_VERSION` is the short version, `CURRENT_PROJECT_VERSION` is the build number. Settings shows `Version 1.3.0 (6)` from the app bundle, and the Apply screen repeats that line. After you pull and Run, those screens should show this number.
+The Mesh Config target is **1.3.0 (7)**: `MARKETING_VERSION` is the short version, `CURRENT_PROJECT_VERSION` is the build number. Settings shows `Version 1.3.0 (7)` from the app bundle, and the Apply screen repeats that line. After you pull and Run, those screens should show this number.
 
 Bump both values on every shippable change so a TestFlight or device install can be told apart from the last one. Raise `CURRENT_PROJECT_VERSION` by 1 each time, in both the Debug and Release configurations. Raise `MARKETING_VERSION` when you want a new short version (1.1.1, then 1.2.0). Do not type the number into Swift; Settings and Apply read `CFBundleShortVersionString` and `CFBundleVersion`.
 
@@ -92,7 +92,7 @@ Power, Bluetooth, security, and module configs other than MQTT are read during t
 
 Full checklist and timeouts: [docs/APPLY_VERIFY.md](docs/APPLY_VERIFY.md). Screen contract: [docs/SCREENS_UX.md](docs/SCREENS_UX.md).
 
-Profiles and the device roster are JSON files under Application Support (`fleet-profiles.json`, `configured-devices.json`). Saving a profile strips any exportable key field and locks the TAK template invariants (ShortTurbo, Ignore MQTT off, Ok to MQTT on, hop limit 3, transmit on, uplink and downlink, LOCAL_ONLY, HAE altitude, precise location, replace default primary). Empty MQTT address, username, or root are filled with the OpenTAKServer defaults (`mcsctak.duckdns.org:8883`, `meshgw`, `opentakserver`).
+Profiles and the device roster are JSON files under Application Support (`fleet-profiles.json`, `configured-devices.json`). Saving a profile strips any exportable key field and locks the TAK template invariants (ShortTurbo, Ignore MQTT off, Ok to MQTT on, hop limit 3, transmit on, uplink and downlink, rebroadcast ALL, HAE altitude, precise location, replace default primary). Empty MQTT address, username, or root are filled with the OpenTAKServer defaults (`mcsctak.duckdns.org:8883`, `meshgw`, `opentakserver`).
 
 ## Radios
 

@@ -46,7 +46,7 @@ Sections matching the model: LoRa, Channel, Device defaults, Position, Display, 
 | Hop limit | Locked 3 |
 | Transmit | Locked On |
 | Default role | Segmented: TAK Tracker \| TAK |
-| Rebroadcast | LOCAL_ONLY (fixed for TAK template) |
+| Rebroadcast | ALL (locked; CORE_PORTNUMS_ONLY drops ATAK chat) |
 | Smart Position | Toggle |
 | Altitude | Show “HAE (ALTITUDE)” read-only correct; no MSL toggle on TAK template |
 | Units | Imperial / Metric |

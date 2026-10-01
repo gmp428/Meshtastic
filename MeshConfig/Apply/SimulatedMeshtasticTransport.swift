@@ -119,7 +119,7 @@ final class SimulatedMeshtasticTransport: FleetRadioTransport {
         let device = try! PhoneAPICodec.deviceConfig(
             merging: Data(),
             role: .clientBase,
-            settings: DeviceSettings(rebroadcastMode: .all, timezone: nil)
+            settings: DeviceSettings(rebroadcastMode: .localOnly, timezone: nil)
         )
         let position = try! PhoneAPICodec.positionConfig(
             merging: Data(),

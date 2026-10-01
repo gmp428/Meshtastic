@@ -69,7 +69,7 @@ Rewriting a section that already matches is what rebooted the radio once per sec
 ### Device (`Config.Device`)
 - Tracker: `role` = session role (`TAK` or `TAK_TRACKER`)
 - Gateway: `role` = `CLIENT` (protobuf 0, written with force so the zero is not omitted)
-- `rebroadcast_mode = LOCAL_ONLY`
+- `rebroadcast_mode = ALL` (CORE_PORTNUMS_ONLY drops ATAK_PLUGIN port 72)
 - optional `tzdef` for standalones
 
 ### Position (`Config.Position`)
@@ -129,7 +129,7 @@ After channel Send, read back and require **all** TAK checks green:
 10. Primary channel uplink on and downlink on  
 11. Role matches session choice (CLIENT for a gateway)  
 12. Long name matches the callsign when this sync changed it. When the long name was left alone, the row passes with the radio’s existing name.  
-13. Rebroadcast LOCAL_ONLY  
+13. Rebroadcast ALL  
 14. Smart Position matches profile  
 15. Position flags: ALTITUDE on, ALTITUDE_MSL off  
 16. GEOIDAL_SEPARATION matches profile  

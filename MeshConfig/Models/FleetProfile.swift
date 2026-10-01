@@ -38,7 +38,8 @@ extension FleetProfile {
         lora.configOkToMQTT = true
         lora.hopLimit = 3
         lora.txEnabled = true
-        device.rebroadcastMode = .localOnly
+        // ALL, not CORE_PORTNUMS_ONLY. That mode drops ATAK_PLUGIN (port 72), so OTS chat never reaches a tracker.
+        device.rebroadcastMode = .all
         position.flags.altitude = true
         position.flags.altitudeMSL = false
         channel.preciseLocation = true
@@ -412,7 +413,7 @@ enum BuiltInProfiles {
                 replaceDefaultPrimary: true
             ),
             device: DeviceSettings(
-                rebroadcastMode: .localOnly,
+                rebroadcastMode: .all,
                 timezone: "EST5EDT,M3.2.0/2,M11.1.0/2" // optional; standalones
             ),
             position: PositionSettings(
@@ -510,7 +511,7 @@ enum ProfileAcceptance {
         ("ch.downlink", "Primary channel downlink is on"),
         ("dev.role", "Role matches the function chosen at apply"),
         ("owner.longName", "Long name matches when a new callsign was written"),
-        ("dev.rebroadcast", "Rebroadcast is LOCAL_ONLY"),
+        ("dev.rebroadcast", "Rebroadcast is ALL"),
         ("pos.smart", "Smart Position matches profile (on for ops)"),
         ("pos.hae", "Position flags: ALTITUDE on, ALTITUDE_MSL off"),
         ("pos.geoid", "GEOIDAL_SEPARATION on when profile requests it"),
@@ -549,7 +550,7 @@ enum ProfileAcceptance {
                     : "Long name matches the TAK callsign",
                 ok: appliedLongName == nil || snap.longName == appliedLongName
             ),
-            VerifyCheckResult(id: "dev.rebroadcast", label: "Rebroadcast is LOCAL_ONLY", ok: snap.rebroadcastMode == .localOnly),
+            VerifyCheckResult(id: "dev.rebroadcast", label: "Rebroadcast is ALL", ok: snap.rebroadcastMode == .all),
             VerifyCheckResult(id: "pos.smart", label: "Smart Position matches profile", ok: snap.smartPosition == profile.position.smartPosition),
             VerifyCheckResult(id: "pos.hae", label: "Altitude is HAE path (not MSL)", ok: snap.positionFlags?.isTAKAltitudeCorrect == true),
             VerifyCheckResult(id: "pos.geoid", label: "Geoidal separation matches profile", ok: snap.positionFlags?.geoidalSeparation == profile.position.flags.geoidalSeparation),
