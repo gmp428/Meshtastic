@@ -15,6 +15,7 @@
 		E10000000000000000000205 /* FleetRadioTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000105 /* FleetRadioTransport.swift */; };
 		E10000000000000000000206 /* CoreBluetoothMeshtasticTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000106 /* CoreBluetoothMeshtasticTransport.swift */; };
 		E10000000000000000000211 /* PhoneAPICodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000111 /* PhoneAPICodec.swift */; };
+		E10000000000000000000212 /* SyncDiff.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000112 /* SyncDiff.swift */; };
 		E10000000000000000000207 /* SimulatedMeshtasticTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000107 /* SimulatedMeshtasticTransport.swift */; };
 		E10000000000000000000208 /* ApplyDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000108 /* ApplyDriver.swift */; };
 		E10000000000000000000209 /* FleetLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000109 /* FleetLibrary.swift */; };
@@ -39,6 +40,7 @@
 		E10000000000000000000105 /* FleetRadioTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRadioTransport.swift; sourceTree = "<group>"; };
 		E10000000000000000000106 /* CoreBluetoothMeshtasticTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreBluetoothMeshtasticTransport.swift; sourceTree = "<group>"; };
 		E10000000000000000000111 /* PhoneAPICodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneAPICodec.swift; sourceTree = "<group>"; };
+		E10000000000000000000112 /* SyncDiff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncDiff.swift; sourceTree = "<group>"; };
 		E10000000000000000000107 /* SimulatedMeshtasticTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatedMeshtasticTransport.swift; sourceTree = "<group>"; };
 		E10000000000000000000108 /* ApplyDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplyDriver.swift; sourceTree = "<group>"; };
 		E10000000000000000000109 /* FleetLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetLibrary.swift; sourceTree = "<group>"; };
@@ -125,6 +127,7 @@
 				E10000000000000000000105 /* FleetRadioTransport.swift */,
 				E10000000000000000000106 /* CoreBluetoothMeshtasticTransport.swift */,
 				E10000000000000000000111 /* PhoneAPICodec.swift */,
+				E10000000000000000000112 /* SyncDiff.swift */,
 				E10000000000000000000107 /* SimulatedMeshtasticTransport.swift */,
 				E10000000000000000000108 /* ApplyDriver.swift */,
 			);
@@ -240,6 +243,7 @@
 				E10000000000000000000205 /* FleetRadioTransport.swift in Sources */,
 				E10000000000000000000206 /* CoreBluetoothMeshtasticTransport.swift in Sources */,
 				E10000000000000000000211 /* PhoneAPICodec.swift in Sources */,
+				E10000000000000000000212 /* SyncDiff.swift in Sources */,
 				E10000000000000000000207 /* SimulatedMeshtasticTransport.swift in Sources */,
 				E10000000000000000000208 /* ApplyDriver.swift in Sources */,
 				E10000000000000000000209 /* FleetLibrary.swift in Sources */,
@@ -376,7 +380,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -387,7 +391,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1.1;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.meshconfig.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -409,7 +413,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -420,7 +424,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1.1;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.meshconfig.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

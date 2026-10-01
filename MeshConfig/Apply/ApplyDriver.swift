@@ -36,7 +36,7 @@ final class ApplyDriver: ObservableObject {
     private var library: FleetLibrary?
     private var roster: DeviceRosterStore?
     private var rosterDeviceID: UUID?
-    private var ackedSections: Set<ApplySection> = []
+    private var pendingWrites: [SyncWrite] = []
     private var didFinish = false
     private var pumpTask: Task<Void, Never>?
     private var sessionObserver: AnyCancellable?
@@ -54,6 +54,8 @@ final class ApplyDriver: ObservableObject {
         profile: FleetProfile,
         role: DeviceRole,
         names: RadioNames,
+        longEdited: Bool,
+        shortEdited: Bool,
         rosterDeviceID: UUID?
     ) async throws {
         guard isReadyForNextRadio else { throw MeshApplyPrepError.sessionBusy }
@@ -67,13 +69,19 @@ final class ApplyDriver: ObservableObject {
         try FleetPSKStore.ensurePSK(for: &prepared)
         library?.replace(prepared)
 
-        let nextSession = ApplySession(profile: prepared, role: role, names: names)
+        let nextSession = ApplySession(
+            profile: prepared,
+            role: role,
+            names: names,
+            longEdited: longEdited,
+            shortEdited: shortEdited
+        )
         adopt(nextSession)
         discovered = []
         outcome = nil
         activeRadio = nil
         self.rosterDeviceID = rosterDeviceID
-        ackedSections = []
+        scrubPendingWrites()
         didFinish = false
         bluetoothMessage = nil
 
@@ -105,6 +113,13 @@ final class ApplyDriver: ObservableObject {
         session?.onDisconnected()
     }
 
+    /// A scan hit can belong to a roster row the setup screen did not pick first.
+    func noteRosterMatch(_ id: UUID) {
+        if rosterDeviceID == nil {
+            rosterDeviceID = id
+        }
+    }
+
     func select(_ radio: DiscoveredRadio) {
         guard session?.state == .scanning else { return }
         activeRadio = radio
@@ -126,6 +141,7 @@ final class ApplyDriver: ObservableObject {
             current.reportFailure(message: "cancelled")
         }
         outcome = nil
+        scrubPendingWrites()
         if let radio, let current {
             record(
                 radio: radio,
@@ -162,23 +178,30 @@ final class ApplyDriver: ObservableObject {
         while !Task.isCancelled {
             guard let session else { return }
             switch session.state {
-            case .applying(let section):
+            case .comparing:
                 spins = 0
-                if ackedSections.contains(section) {
-                    session.reportFailure(message: "Apply stalled on \(section.displayName).")
-                    continue
-                }
                 do {
-                    try await write(section, session: session)
-                    guard !Task.isCancelled else { return }
-                    ackedSections.insert(section)
-                    session.onWriteAcknowledged(section: section)
+                    try await publishDiff(session: session)
                 } catch is CancellationError {
                     return
                 } catch {
                     session.reportFailure(message: safeMessage(error))
                 }
-            case .waitingReboot(let section):
+            case .applyingChanges:
+                spins = 0
+                do {
+                    guard let transport else { throw MeshtasticBLEError.notConnected }
+                    try await transport.applyTransaction(pendingWrites)
+                    guard !Task.isCancelled else { return }
+                    scrubPendingWrites()
+                    session.onChangesCommitted()
+                } catch is CancellationError {
+                    return
+                } catch {
+                    scrubPendingWrites()
+                    session.reportFailure(message: safeMessage(error))
+                }
+            case .waitingReboot:
                 spins = 0
                 let dropped = await transport?.waitForLinkDrop(timeout: session.config.rebootGrace) ?? false
                 guard !Task.isCancelled else { return }
@@ -186,10 +209,10 @@ final class ApplyDriver: ObservableObject {
                     session.onLinkLost()
                 } else {
                     session.reportFailure(
-                        message: "The radio did not drop the link after \(section.displayName). Reboot timed out."
+                        message: "The radio did not drop the link after saving settings. Reboot timed out."
                     )
                 }
-            case .reconnecting(let after):
+            case .reconnecting:
                 spins = 0
                 guard let id = activeRadio?.peripheralID else {
                     session.reportFailure(message: "No radio identifier to reconnect.")
@@ -202,7 +225,7 @@ final class ApplyDriver: ObservableObject {
                 } catch {
                     let waited = Int(session.config.reconnectTimeout.rounded())
                     session.reportFailure(
-                        message: "Reconnect after \(after.displayName) failed. Waited \(waited) seconds for Bluetooth to return. \(safeMessage(error))"
+                        message: "Reconnect after the settings save failed. Waited \(waited) seconds for Bluetooth to return. \(safeMessage(error))"
                     )
                 }
             case .verifying:
@@ -228,7 +251,7 @@ final class ApplyDriver: ObservableObject {
             case .connecting, .handshaking, .ensuringPSK:
                 spins += 1
                 if spins > 40 {
-                    session.reportFailure(message: "Apply stalled before the next config section.")
+                    session.reportFailure(message: "Apply stalled before the sync could continue.")
                     continue
                 }
                 try? await Task.sleep(nanoseconds: 20_000_000)
@@ -285,29 +308,51 @@ final class ApplyDriver: ObservableObject {
         }
     }
 
-    private func write(_ section: ApplySection, session: ApplySession) async throws {
+    private func publishDiff(session: ApplySession) async throws {
         guard let transport else { throw MeshtasticBLEError.notConnected }
-        let profile = session.profile
-        switch section {
-        case .owner:
-            try await transport.setOwner(longName: session.longName, shortName: session.shortName)
-        case .lora:
-            try await transport.setLoRa(profile.lora)
-        case .device:
-            try await transport.setDevice(role: session.role, settings: profile.device)
-        case .position:
-            try await transport.setPosition(profile.position)
-        case .display:
-            try await transport.setDisplay(profile.display)
-        case .channel:
-            // Missing Keychain key fails here, before any channel write.
-            var psk = try FleetPSKStore.loadPSKData(for: profile.channel.pskRef)
-            defer {
-                for index in psk.indices {
-                    psk[index] = 0
-                }
+        guard let inventory = transport.radioInventory() else {
+            throw MeshtasticBLEError.adminFailed("The radio config was not read before the sync.")
+        }
+        session.noteRadioOwner(longName: inventory.longName, shortName: inventory.shortName)
+        var psk = try FleetPSKStore.loadPSKData(for: session.profile.channel.pskRef)
+        defer {
+            for index in psk.indices {
+                psk[index] = 0
             }
-            try await transport.setPrimaryChannel(profile.channel, psk: psk)
+        }
+        let plan = try SyncDiff.plan(
+            inventory: inventory,
+            profile: session.profile,
+            role: session.role,
+            names: session.nameRequest,
+            longEdited: session.didEditLongName,
+            shortEdited: session.didEditShortName,
+            psk: psk
+        )
+        pendingWrites = plan.writes
+        session.adoptPlan(plan)
+    }
+
+    private func scrubPendingWrites() {
+        pendingWrites = pendingWrites.map { write in
+            switch write {
+            case .owner(var data):
+                zero(&data)
+                return .owner(Data())
+            case .channel(var data):
+                zero(&data)
+                return .channel(Data())
+            case .config(let kind, var data):
+                zero(&data)
+                return .config(kind, Data())
+            }
+        }
+        pendingWrites = []
+    }
+
+    private func zero(_ data: inout Data) {
+        for index in data.indices {
+            data[index] = 0
         }
     }
 
@@ -321,7 +366,7 @@ final class ApplyDriver: ObservableObject {
                 profile: session.profile,
                 role: session.role,
                 status: outcome.passed ? .configured : .failed,
-                names: outcome.passed ? RadioNames(longName: session.longName, shortName: session.shortName) : nil
+                names: outcome.passed ? session.namesForRoster : nil
             )
         }
         await teardownConnection()
@@ -340,8 +385,8 @@ final class ApplyDriver: ObservableObject {
                 profileName: session.profile.name,
                 profileID: session.profile.id,
                 role: session.role,
-                longName: session.longName,
-                shortName: session.shortName,
+                longName: session.resultLongName,
+                shortName: session.resultShortName,
                 checklist: session.lastChecklist,
                 message: "Configured",
                 failedChecks: []
@@ -356,8 +401,8 @@ final class ApplyDriver: ObservableObject {
                 profileName: session.profile.name,
                 profileID: session.profile.id,
                 role: session.role,
-                longName: session.longName,
-                shortName: session.shortName,
+                longName: session.resultLongName,
+                shortName: session.resultShortName,
                 checklist: failedLabels.isEmpty ? session.lastChecklist : failedLabels,
                 message: failure.message,
                 failedChecks: failure.failedChecks
@@ -394,6 +439,7 @@ final class ApplyDriver: ObservableObject {
     }
 
     private func teardownConnection() async {
+        scrubPendingWrites()
         session?.disconnect()
         await transport?.disconnect()
         transport?.stopScan()

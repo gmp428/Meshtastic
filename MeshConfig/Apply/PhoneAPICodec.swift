@@ -65,6 +65,8 @@ enum PhoneAPICodec {
         var name: String?
         var nonDefaultPSK: Bool
         var preciseLocation: Bool
+        /// Original Channel message. May contain the channel PSK. Do not log it.
+        var raw: Data
     }
 
     struct ParsedAdmin: Equatable {
@@ -78,6 +80,10 @@ enum PhoneAPICodec {
     enum Inbound: Equatable {
         case myNode(UInt32)
         case config(ConfigSlice)
+        /// Config oneof this app reads but does not write (power, network, bluetooth, security). Body is not retained.
+        case otherConfig(field: Int)
+        /// ModuleConfig oneof field number. Body is not retained (MQTT configs can hold passwords).
+        case moduleConfig(field: Int)
         case channel(ParsedChannel)
         case configComplete(UInt32)
         case routing(requestID: UInt32, error: UInt64?)
@@ -109,17 +115,33 @@ enum PhoneAPICodec {
         return serialize(fields)
     }
 
-    /// Replaces long_name (field 2) and short_name (field 3). Every other User field is copied through.
-    static func userMessage(merging existing: Data, longName: String, shortName: String) throws -> Data {
+    /// Replaces only the name fields that are non-nil. A nil field is left as it was on the radio.
+    /// Empty strings are ignored so a blank Apply field cannot clear a name.
+    static func userMessage(merging existing: Data, longName: String?, shortName: String?) throws -> Data {
         var fields = try parse(existing)
-        upsertBytes(&fields, 2, Data(longName.utf8))
-        upsertBytes(&fields, 3, Data(shortName.utf8))
+        if let longName, !longName.isEmpty {
+            upsertBytes(&fields, 2, Data(longName.utf8))
+        }
+        if let shortName, !shortName.isEmpty {
+            upsertBytes(&fields, 3, Data(shortName.utf8))
+        }
         return serialize(fields)
     }
 
     static func longName(from user: Data) throws -> String? {
-        guard let raw = bytes(try parse(user), 2), !raw.isEmpty else { return nil }
-        return String(data: raw, encoding: .utf8)
+        try text(from: user, field: 2)
+    }
+
+    static func shortName(from user: Data) throws -> String? {
+        try text(from: user, field: 3)
+    }
+
+    static func beginEditAdmin(passkey: Data) -> Data {
+        editTransactionAdmin(field: 64, passkey: passkey)
+    }
+
+    static func commitEditAdmin(passkey: Data) -> Data {
+        editTransactionAdmin(field: 65, passkey: passkey)
     }
 
     static func getConfigAdmin(kind: UInt64, passkey: Data?) -> Data {
@@ -225,21 +247,58 @@ enum PhoneAPICodec {
         preciseLocation: Bool,
         channelID: UInt32
     ) throws -> Data {
+        try mergedPrimaryChannel(
+            existing: nil,
+            name: name,
+            psk: psk,
+            uplink: uplink,
+            downlink: downlink,
+            preciseLocation: preciseLocation,
+            channelID: channelID
+        )
+    }
+
+    /// Patches the primary channel and keeps its id. A new id is used only when the radio has none.
+    /// Callers compare the result with `canonical` so an identical channel is not written again.
+    static func mergedPrimaryChannel(
+        existing: Data?,
+        name: String,
+        psk: Data,
+        uplink: Bool,
+        downlink: Bool,
+        preciseLocation: Bool,
+        channelID: UInt32? = nil
+    ) throws -> Data {
         let nameBytes = Data(name.utf8)
         guard nameBytes.count <= maxChannelNameBytes else { throw CodecError.channelNameTooLong }
+        var channelFields: [Field] = []
+        var settingFields: [Field] = []
+        if let existing {
+            channelFields = try parse(existing)
+            if let settings = bytes(channelFields, 2) {
+                settingFields = try parse(settings)
+            }
+        }
+        let preservedID = channelID ?? fixed32(settingFields, 4) ?? UInt32.random(in: 1...UInt32.max)
+        upsertBytes(&settingFields, 2, psk)
+        upsertBytes(&settingFields, 3, nameBytes)
+        upsertFixed32(&settingFields, 4, preservedID)
+        upsertVarint(&settingFields, 5, uplink ? 1 : 0)
+        upsertVarint(&settingFields, 6, downlink ? 1 : 0)
+        var moduleFields: [Field] = []
+        if let module = bytes(settingFields, 7) {
+            moduleFields = try parse(module)
+        }
         let precision = preciseLocation ? preciseLocationBits : coarseLocationBits
-        let module = serialize([Field(number: 1, value: .varint(precision))])
-        var settings: [Field] = []
-        upsertBytes(&settings, 2, psk)
-        upsertBytes(&settings, 3, nameBytes)
-        settings.append(Field(number: 4, value: .fixed32(channelID)))
-        upsertVarint(&settings, 5, uplink ? 1 : 0)
-        upsertVarint(&settings, 6, downlink ? 1 : 0)
-        upsertBytes(&settings, 7, module)
-        var channel: [Field] = []
-        upsertBytes(&channel, 2, serialize(settings))
-        upsertVarint(&channel, 3, 1) // PRIMARY
-        return serialize(channel)
+        upsertVarint(&moduleFields, 1, precision, force: true)
+        upsertBytes(&settingFields, 7, serialize(moduleFields))
+        upsertBytes(&channelFields, 2, serialize(settingFields))
+        upsertVarint(&channelFields, 3, 1, force: true) // PRIMARY
+        return serialize(channelFields)
+    }
+
+    static func canonical(_ data: Data) throws -> Data {
+        serialize(try parse(data))
     }
 
     static func toRadioPacket(to node: UInt32, packetID: UInt32, admin: Data, wantResponse: Bool) -> Data {
@@ -265,8 +324,17 @@ enum PhoneAPICodec {
         if let info = bytes(fields, 3), let node = varint(try parse(info), 1) {
             return .myNode(UInt32(truncatingIfNeeded: node))
         }
-        if let configBytes = bytes(fields, 5), let slice = try configSlice(configBytes) {
-            return .config(slice)
+        if let configBytes = bytes(fields, 5) {
+            if let slice = try configSlice(configBytes) {
+                return .config(slice)
+            }
+            if let field = try configFieldNumber(configBytes) {
+                return .otherConfig(field: field)
+            }
+        }
+        if let moduleBytes = bytes(fields, 9) {
+            let field = (try parse(moduleBytes).first?.number) ?? 0
+            return .moduleConfig(field: field)
         }
         if let channelBytes = bytes(fields, 10) {
             return .channel(try parsedChannel(channelBytes))
@@ -284,6 +352,17 @@ enum PhoneAPICodec {
             return try classifyPacket(packetBytes)
         }
         return .other
+    }
+
+    static func snapshot(inventory: RadioInventory) throws -> DeviceSnapshot {
+        guard let raw = try primaryChannel(in: inventory.channels) else { throw CodecError.malformed }
+        return try snapshot(
+            lora: inventory.lora,
+            device: inventory.device,
+            position: inventory.position,
+            channel: try parsedChannel(raw),
+            owner: inventory.owner
+        )
     }
 
     static func snapshot(
@@ -424,11 +503,18 @@ enum PhoneAPICodec {
             "880602aa06080102030405060708",
             rebootAdmin(seconds: 2, passkey: Data([UInt8(1), 2, 3, 4, 5, 6, 7, 8]))
         ) else { return false }
+        let passkey = Data([UInt8(1), 2, 3, 4, 5, 6, 7, 8])
+        guard try encodeMatches("800401aa06080102030405060708", beginEditAdmin(passkey: passkey)) else { return false }
+        guard try encodeMatches("880401aa06080102030405060708", commitEditAdmin(passkey: passkey)) else { return false }
 
         let existingOwner = try data(hex: "0a032161623001420111")
         let renamed = try userMessage(merging: existingOwner, longName: "Koala", shortName: "Koal")
         guard try encodeMatches("0a0321616212054b6f616c611a044b6f616c3001420111", renamed) else { return false }
         guard try longName(from: renamed) == "Koala" else { return false }
+        guard try shortName(from: renamed) == "Koal" else { return false }
+        let longOnly = try userMessage(merging: existingOwner, longName: "Koala", shortName: nil)
+        guard try encodeMatches("0a0321616212054b6f616c613001420111", longOnly) else { return false }
+        guard try shortName(from: longOnly) == nil else { return false }
         guard try encodeMatches(
             "8202170a0321616212054b6f616c611a044b6f616c3001420111",
             setOwnerAdmin(user: renamed, passkey: Data())
@@ -451,6 +537,8 @@ enum PhoneAPICodec {
               ackID == 0x01020304, ackError == nil else { return false }
         guard case .routing(let badID, let badError) = try classify(data(hex: "120d220b0805120218243504030201")),
               badID == 0x01020304, badError == 36 else { return false }
+        guard case .otherConfig(3) = try classify(data(hex: "2a021a00")) else { return false }
+        guard case .moduleConfig(1) = try classify(data(hex: "4a020a00")) else { return false }
         guard case .config(let slice) = try classify(data(hex: "2a0b3209080118fa0140034801")),
               slice.kind == .lora else { return false }
         let preserved = try loraConfig(merging: slice.body, settings: lora)
@@ -529,6 +617,13 @@ enum PhoneAPICodec {
         }
     }
 
+    static func upsertFixed32(_ fields: inout [Field], _ number: Int, _ value: UInt32) {
+        fields.removeAll { $0.number == number }
+        if value != 0 {
+            fields.append(Field(number: number, value: .fixed32(value)))
+        }
+    }
+
     static func upsertBytes(_ fields: inout [Field], _ number: Int, _ data: Data) {
         fields.removeAll { $0.number == number }
         if !data.isEmpty {
@@ -592,6 +687,32 @@ enum PhoneAPICodec {
         return message
     }
 
+    private static func text(from user: Data, field: Int) throws -> String? {
+        guard let raw = bytes(try parse(user), field), !raw.isEmpty else { return nil }
+        return String(data: raw, encoding: .utf8)
+    }
+
+    private static func editTransactionAdmin(field: Int, passkey: Data) -> Data {
+        var fields: [Field] = []
+        upsertVarint(&fields, field, 1, force: true)
+        if passkey.count == 8 {
+            upsertBytes(&fields, passkeyField, passkey)
+        }
+        return serialize(fields)
+    }
+
+    private static func configFieldNumber(_ data: Data) throws -> Int? {
+        for field in try parse(data) {
+            switch field.number {
+            case 1, 2, 3, 4, 5, 6, 7, 8:
+                return field.number
+            default:
+                continue
+            }
+        }
+        return nil
+    }
+
     private static func configSlice(_ data: Data) throws -> ConfigSlice? {
         let fields = try parse(data)
         if let body = bytes(fields, 1) { return ConfigSlice(kind: .device, body: body) }
@@ -626,7 +747,8 @@ enum PhoneAPICodec {
             role: role,
             name: name,
             nonDefaultPSK: nonDefault,
-            preciseLocation: precise
+            preciseLocation: precise,
+            raw: data
         )
     }
 

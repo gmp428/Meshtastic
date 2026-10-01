@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// Radios remembered on this phone. Removing one does not factory-reset the radio.
@@ -13,6 +14,10 @@ final class DeviceRosterStore: ObservableObject {
 
     func device(id: UUID) -> ConfiguredDevice? {
         devices.first { $0.id == id }
+    }
+
+    func device(peripheralID: UUID) -> ConfiguredDevice? {
+        devices.first { $0.peripheralID == peripheralID }
     }
 
     func upsertAttempt(
@@ -36,9 +41,13 @@ final class DeviceRosterStore: ObservableObject {
             devices[matchIndex].profileID = profileID
             devices[matchIndex].role = role
             if status == .configured, let names {
-                devices[matchIndex].longName = names.longName
-                devices[matchIndex].shortName = names.shortName
-                devices[matchIndex].displayName = names.longName
+                if let longName = names.longName, !longName.isEmpty {
+                    devices[matchIndex].longName = longName
+                    devices[matchIndex].displayName = longName
+                }
+                if let shortName = names.shortName, !shortName.isEmpty {
+                    devices[matchIndex].shortName = shortName
+                }
             } else if devices[matchIndex].longName == nil {
                 devices[matchIndex].displayName = displayName
             }

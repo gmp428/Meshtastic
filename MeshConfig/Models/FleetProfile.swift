@@ -275,15 +275,11 @@ enum BuiltInProfiles {
 struct ProfileApplyPlan: Sendable {
     var profile: FleetProfile
     var roleForThisDevice: DeviceRole
-    var expectRebootAfter: Set<ApplySection>
 
     static func make(from profile: FleetProfile, role: DeviceRole) -> ProfileApplyPlan {
-        // LoRa / Device / Position / Display trigger reboot on save; Channel does not (Chaos Koalas).
-        ProfileApplyPlan(
-            profile: profile,
-            roleForThisDevice: role,
-            expectRebootAfter: [.owner, .lora, .device, .position, .display]
-        )
+        // Sync writes only the sections that differ, inside one edit transaction.
+        // The radio reboots at most once, when commit_edit_settings saves.
+        ProfileApplyPlan(profile: profile, roleForThisDevice: role)
     }
 }
 
@@ -328,7 +324,7 @@ enum ProfileAcceptance {
         ("ch.psk", "Primary PSK is non-default AES-256"),
         ("ch.precise", "Precise location is on"),
         ("dev.role", "Role is TAK or TAK_TRACKER as chosen at apply"),
-        ("owner.longName", "Long name matches the TAK callsign entered at apply"),
+        ("owner.longName", "Long name matches when a new callsign was written"),
         ("dev.rebroadcast", "Rebroadcast is LOCAL_ONLY"),
         ("pos.smart", "Smart Position matches profile (on for ops)"),
         ("pos.hae", "Position flags: ALTITUDE on, ALTITUDE_MSL off"),
@@ -339,7 +335,7 @@ enum ProfileAcceptance {
         profile: FleetProfile,
         snap: DeviceSnapshot,
         appliedRole: DeviceRole,
-        appliedLongName: String
+        appliedLongName: String?
     ) -> [VerifyCheckResult] {
         [
             VerifyCheckResult(id: "lora.preset", label: "LoRa preset is ShortTurbo", ok: snap.modemPreset == .shortTurbo),
@@ -354,8 +350,10 @@ enum ProfileAcceptance {
             VerifyCheckResult(id: "dev.role", label: "Role matches apply choice", ok: snap.role == appliedRole),
             VerifyCheckResult(
                 id: "owner.longName",
-                label: "Long name matches the TAK callsign",
-                ok: snap.longName == appliedLongName && !appliedLongName.isEmpty
+                label: appliedLongName == nil
+                    ? "Long name left as the radio already had it"
+                    : "Long name matches the TAK callsign",
+                ok: appliedLongName == nil || snap.longName == appliedLongName
             ),
             VerifyCheckResult(id: "dev.rebroadcast", label: "Rebroadcast is LOCAL_ONLY", ok: snap.rebroadcastMode == .localOnly),
             VerifyCheckResult(id: "pos.smart", label: "Smart Position matches profile", ok: snap.smartPosition == profile.position.smartPosition),

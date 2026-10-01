@@ -60,11 +60,11 @@ Sections matching the model: LoRa, Channel, Device defaults, Position, Display, 
    - **TAK Tracker** — standalone
    - **TAK** — this phone will run ATAK/iTAK + Local TAK Server
 3. Short help under role (from `DeviceRole.shortHelp`)
-4. **Name on TAK** — required **long name** (the Meshtastic name ATAK shows as this radio’s callsign) and optional **short name** (the 4-character mesh badge). Blank short name uses the first 4 characters of the long name. These are per radio, not a fleet setting.
+4. **Name on TAK** — optional **long name** (the Meshtastic name ATAK shows as this radio’s callsign) and optional **short name** (the 4-byte mesh badge). Blank means leave that field alone. Both blank sends no name change. A roster row, Re-apply, or a scan hit that matches a roster peripheral fills the last synced names. Those fills are not edits. After connect, names read from the radio replace an unedited prefill.
 5. Primary: **Scan for radios**
 6. Footer shows the same bundle version as Settings (`Version <short> (<build>)`)
 
-Gate: cannot scan until profile, role, and a valid long name are set.
+Gate: cannot scan until a profile and a role are set, and any typed name fits the byte limit. Blank names are allowed.
 
 ### 3b. Scan
 
@@ -75,19 +75,16 @@ Gate: cannot scan until profile, role, and a valid long name are set.
 
 ### 3c. Progress (single screen, step list)
 
-Title: profile name, TAK long name, mesh badge, role chip.
+Title: profile name, the long name that will be on the radio (or “Long name unchanged”), the mesh badge, role chip, and a one-line summary: **3 settings will change** or **Already up to date**. The changed labels sit under that line.
 
 Steps (checkmarks / spinner / fail):
 
 1. Connected & handshake  
 2. Fleet PSK ready  
-3. TAK long name (… reboot)  
-4. LoRa (… reboot)  
-5. Device role + rebroadcast (… reboot)  
-6. Position (… reboot)  
-7. Display (… reboot)  
-8. Channel Send  
-9. Verify  
+3. Compare with radio  
+4. Write changes (or “Already up to date”)  
+5. Reboot (or “No reboot”)  
+6. Verify  
 
 Footer: Cancel → disconnect, mark failed “cancelled”, return to setup.
 
@@ -112,7 +109,7 @@ Footer: Cancel → disconnect, mark failed “cancelled”, return to setup.
 | Rule | Why |
 | --- | --- |
 | Role asked every device | Stops TAK vs TAK_TRACKER mix-ups |
-| Long name asked every device | TAK callsign is per radio, not per fleet |
+| Long name is per device, and optional | TAK callsign is per radio. Blank leaves the radio’s name alone. |
 | Next device never auto-connects | Wrong board risk |
 | One session at a time | BLE constraint |
 | Rotate PSK confirms + copy “re-apply all” | Mesh split awareness |
@@ -145,7 +142,7 @@ Footer: Cancel → disconnect, mark failed “cancelled”, return to setup.
 | --- | --- |
 | `ProfilesListView` | `[FleetProfile]` store |
 | `ProfileEditorView` | `FleetProfile` + `FleetPSKStore` |
-| `ApplySetupView` | profile id + `DeviceRole?` + long name + optional short name |
+| `ApplySetupView` | profile id + `DeviceRole?` + optional long name + optional short name |
 | `ScanView` | CB scan |
 | `ApplyProgressView` | `ApplySession` |
 | `ApplyResultView` | checklist / failure |
@@ -157,8 +154,8 @@ Footer: Cancel → disconnect, mark failed “cancelled”, return to setup.
 **New tab: Devices** (between Profiles and Apply, or after Apply).
 
 On **successful verify**, upsert a `ConfiguredDevice`:
-- displayName = the applied long name
-- `longName` and `shortName` from this apply
+- displayName = the long name on the radio after the sync, when it has one
+- `longName` and `shortName` from the radio after a passing verify (written value, or the value already there)
 - peripheralID / nodeNum when known
 - profileID + **role used for that apply**
 - `lastStatus = configured`, `lastAppliedAt = now`

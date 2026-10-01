@@ -1,8 +1,11 @@
 import Foundation
 
 #if DEBUG
-/// DEBUG-only apply transport. It does not talk to a radio and it does not keep PSK bytes.
+/// DEBUG-only apply transport. It does not talk to a radio and it does not log PSK bytes.
 /// Scan rows are labeled "(DEBUG)" so they cannot be mistaken for hardware.
+///
+/// The first sync of a simulated radio differs from the TAK profile and reboots once.
+/// A later sync in the same process, with the same profile and no name edits, is already up to date.
 @MainActor
 final class SimulatedMeshtasticTransport: FleetRadioTransport {
     static let heltecV3 = UUID(uuidString: "A1111111-1111-4111-8111-111111111111")!
@@ -12,17 +15,12 @@ final class SimulatedMeshtasticTransport: FleetRadioTransport {
     var onBluetoothBlocked: (@MainActor (String?) -> Void)?
     var onUnexpectedLinkLoss: (@MainActor () -> Void)?
 
+    private static var remembered: [UUID: RadioInventory] = [:]
+
     private var scanTask: Task<Void, Never>?
     private var connectedID: UUID?
-    private var wroteLoRa: LoRaSettings?
-    private var wroteRole: DeviceRole?
-    private var wroteDevice: DeviceSettings?
-    private var wrotePosition: PositionSettings?
-    private var wroteChannelName: String?
-    private var wrotePreciseLocation: Bool?
-    private var wrotePSKByteCount: Int?
-    private var wroteLongName: String?
-    private var wroteShortName: String?
+    private var inventory: RadioInventory?
+    private var expectsDrop = false
 
     func startScan() async {
         onBluetoothBlocked?(nil)
@@ -66,87 +64,96 @@ final class SimulatedMeshtasticTransport: FleetRadioTransport {
     }
 
     func handshake() async throws {
-        guard connectedID != nil else { throw MeshtasticBLEError.notConnected }
+        guard let connectedID else { throw MeshtasticBLEError.notConnected }
         try await pause(250)
+        inventory = Self.remembered[connectedID] ?? Self.factory()
     }
 
-    func setLoRa(_ settings: LoRaSettings) async throws {
-        try requireLink()
-        try await pause()
-        wroteLoRa = settings
+    func radioInventory() -> RadioInventory? {
+        inventory
     }
 
-    func setDevice(role: DeviceRole, settings: DeviceSettings) async throws {
-        try requireLink()
+    func applyTransaction(_ writes: [SyncWrite]) async throws {
+        guard !writes.isEmpty else { return }
+        guard let connectedID, var inventory else { throw MeshtasticBLEError.notConnected }
         try await pause()
-        wroteRole = role
-        wroteDevice = settings
-    }
-
-    func setPosition(_ settings: PositionSettings) async throws {
-        try requireLink()
-        try await pause()
-        wrotePosition = settings
-    }
-
-    func setDisplay(_ settings: DisplaySettings) async throws {
-        try requireLink()
-        try await pause()
-        _ = settings
-    }
-
-    func setOwner(longName: String, shortName: String) async throws {
-        try requireLink()
-        guard !longName.isEmpty, !shortName.isEmpty else {
-            throw MeshtasticBLEError.adminFailed("The long name and short name are required.")
-        }
-        try await pause()
-        wroteLongName = longName
-        wroteShortName = shortName
-    }
-
-    func setPrimaryChannel(_ settings: ChannelSettings, psk: Data) async throws {
-        try requireLink()
-        guard psk.count == 32 else { throw MeshtasticBLEError.invalidPSKLength }
-        try await pause()
-        // Record length only. The buffer is not stored.
-        wrotePSKByteCount = psk.count
-        wroteChannelName = settings.name
-        wrotePreciseLocation = settings.preciseLocation
+        inventory = try inventory.applying(writes)
+        self.inventory = inventory
+        Self.remembered[connectedID] = inventory
+        expectsDrop = true
     }
 
     func readSnapshot() async throws -> DeviceSnapshot {
-        try requireLink()
+        guard let inventory else { throw MeshtasticBLEError.notConnected }
         try await pause(250)
-        return DeviceSnapshot(
-            modemPreset: wroteLoRa?.modemPreset,
-            ignoreMQTT: wroteLoRa?.ignoreMQTT,
-            frequencySlot: wroteLoRa?.frequencySlot,
-            primaryChannelName: wroteChannelName,
-            primaryHasNonDefaultPSK: wrotePSKByteCount == 32,
-            preciseLocation: wrotePreciseLocation,
-            role: wroteRole,
-            rebroadcastMode: wroteDevice?.rebroadcastMode,
-            smartPosition: wrotePosition?.smartPosition,
-            positionFlags: wrotePosition?.flags,
-            longName: wroteLongName
-        )
+        return try PhoneAPICodec.snapshot(inventory: inventory)
     }
 
     func disconnect() async {
         stopScan()
         connectedID = nil
+        inventory = nil
     }
 
     func waitForLinkDrop(timeout: TimeInterval) async -> Bool {
         _ = timeout
+        guard expectsDrop else { return false }
         try? await Task.sleep(nanoseconds: 450_000_000)
+        expectsDrop = false
         connectedID = nil
         return true
     }
 
-    private func requireLink() throws {
-        guard connectedID != nil else { throw MeshtasticBLEError.notConnected }
+    private static func factory() -> RadioInventory {
+        let lora = try! PhoneAPICodec.loraConfig(
+            merging: Data(),
+            settings: LoRaSettings(
+                usePreset: true,
+                modemPreset: .longFast,
+                ignoreMQTT: false,
+                frequencySlot: 1,
+                region: .us
+            )
+        )
+        let device = try! PhoneAPICodec.deviceConfig(
+            merging: Data(),
+            role: .clientBase,
+            settings: DeviceSettings(rebroadcastMode: .all, timezone: nil)
+        )
+        let position = try! PhoneAPICodec.positionConfig(
+            merging: Data(),
+            settings: PositionSettings(
+                smartPosition: false,
+                flags: PositionFlagSet(altitude: false, altitudeMSL: true, geoidalSeparation: false),
+                gpsMode: .enabled
+            )
+        )
+        let display = try! PhoneAPICodec.displayConfig(
+            merging: Data(),
+            settings: DisplaySettings(units: .metric)
+        )
+        let owner = try! PhoneAPICodec.userMessage(merging: Data(), longName: "SimRadio", shortName: "Sim")
+        // 0x11 repeated is a stand-in primary key for the simulator, not a fleet key.
+        let channel = try! PhoneAPICodec.channelMessage(
+            name: "LongFast",
+            psk: Data(repeating: 0x11, count: 32),
+            uplink: true,
+            downlink: true,
+            preciseLocation: false,
+            channelID: 0x01020304
+        )
+        return RadioInventory(
+            lora: lora,
+            device: device,
+            position: position,
+            display: display,
+            owner: owner,
+            longName: "SimRadio",
+            shortName: "Sim",
+            channels: [channel],
+            observedConfigFields: [1, 2, 3, 4, 5, 6, 7, 8],
+            observedModuleFields: [1]
+        )
     }
 
     private func pause(_ milliseconds: UInt64 = 320) async throws {

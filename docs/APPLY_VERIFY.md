@@ -5,7 +5,7 @@
 - **One active BLE connection.** Never connect a second radio until the current session reaches `disconnected` (success or failed-and-cleaned-up).
 - **Same `FleetProfile` + Keychain PSK** for every radio that should share the mesh.
 - **Role is chosen per device** at session start: `TAK` (phone + ATAK/iTAK) vs `TAK_TRACKER` (standalone).
-- **Names are chosen per device** at session start. They are not a fleet-wide setting. **Long name** is the Meshtastic name ATAK shows as the callsign / PLI name (24 UTF-8 bytes). **Short name** is the 4-byte mesh badge. Blank short name uses the first 4 characters of the long name that fit in 4 UTF-8 bytes.
+- **Names are chosen per device** at session start. They are not a fleet-wide setting. **Long name** is the Meshtastic name ATAK shows as the callsign / PLI name (24 UTF-8 bytes). **Short name** is the 4-byte mesh badge. A blank field is left unchanged. Both blank sends no owner change. A non-blank field is written only when it differs from the radio.
 - PSK bytes leave Keychain only for the Channel write; never log them.
 - Heltec V3 / T114 / T1000-E: BLE config path is the same; do not assume Wi‑Fi on T114.
 
@@ -15,8 +15,8 @@
 | --- | --- |
 | Profile | Selected `FleetProfile` |
 | Role | Explicit picker (default = `profile.defaultRole`) |
-| Long name | Required text for this radio. TAK callsign. Not stored on the profile. |
-| Short name | Optional. Blank derives the first 4 characters of the long name. |
+| Long name | Optional text for this radio. TAK callsign. Blank keeps the radio’s current long name. Not stored on the profile. |
+| Short name | Optional. Blank keeps the radio’s current short name. It is not derived from the long name. |
 | Peripheral | User picks from scan (Meshtastic service UUID) |
 | PSK | `FleetPSKStore.ensurePSK` then `loadPSKData` |
 
@@ -26,42 +26,31 @@
 idle
   → scanning
   → connecting
+  → handshaking              # want_config drain of the full config, then get_owner
   → ensuringPSK
-  → readingBaseline          # optional; useful for “what was here”
-  → applyingOwner            # set_owner long_name + short_name; expect reboot
-  → waitingReboot(owner)
+  → comparing                # diff; publish "N settings will change" or "Already up to date"
+  → verifying                # when the diff is empty: no begin/commit, no reboot
+  → applyingChanges          # when the diff is not empty: one begin/commit transaction
+  → waitingReboot
   → reconnecting
-  → applyingLoRa             # expect reboot
-  → waitingReboot(lora)
-  → reconnecting
-  → applyingDevice           # role + LOCAL_ONLY; expect reboot
-  → waitingReboot(device)
-  → reconnecting
-  → applyingPosition         # smart + HAE flags; expect reboot
-  → waitingReboot(position)
-  → reconnecting
-  → applyingDisplay          # expect reboot
-  → waitingReboot(display)
-  → reconnecting
-  → applyingChannel          # replace default primary; Send; NO reboot
-  → verifying                # read-back vs ProfileAcceptance
+  → handshaking              # read again; do not write again
+  → verifying
   → succeeded | failed
   → disconnecting
   → disconnected → idle (ready for next radio)
 ```
 
-**Why this section order:** Chaos Koalas documents reboot after LoRa / Device / Position / Display saves; Channel changes do **not** reboot but **must** be Sent. Apply reboot-heavy radio/device/position first so channel write lands on a stable post-reboot link, then verify once.
-
-Batching note: if the Meshtastic BLE stack lets you set multiple Config sections before one reboot, the implementer may coalesce LoRa+Device+Position+Display into fewer reboot cycles — acceptance is identical. Default of this spec is **one section → wait reconnect** for predictable progress UI and easier failure isolation.
+Rewriting a section that already matches is what rebooted the radio once per section. Compare first. `commit_edit_settings` is the only reboot, and only when at least one write was queued.
 
 ## Per-section writes (protobuf intent)
 
 ### Owner (`User` via `AdminMessage.set_owner`)
-- After handshake has seeded `session_passkey`
-- `long_name` = the name entered for this radio (TAK callsign)
-- `short_name` = the badge entered, or the derived 4-character badge
+- After handshake has seeded `session_passkey` and the current `User` has been read
+- Send nothing when both name fields are blank, or when the user did not edit a roster prefill (the connected radio’s names win)
+- `long_name` only when the field is non-blank and differs from the radio
+- `short_name` only when the field is non-blank and differs from the radio
 - Preserve the rest of the `User` returned by `get_owner` (node id, public key, license flag)
-- Current firmware saves owner changes and reboots. Wait for the link to drop, then handshake again.
+- The write is inside the edit transaction, not its own reboot
 
 ### LoRa (`Config.LoRa`)
 - `use_preset = true`
@@ -84,21 +73,26 @@ Batching note: if the Meshtastic BLE stack lets you set multiple Config sections
 - units = imperial/metric from profile
 
 ### Channel
-1. If primary is default LongFast/ShortFast (or `replaceDefaultPrimary`): remove/replace primary.
-2. Write primary: name, AES-256 PSK (32 bytes from Keychain), precise location on, uplink/downlink per profile.
-3. **Send channel config to device** (required; no reboot).
+1. Read the current primary (or index 0). Keep its channel id. Do not mint a new id on every sync.
+2. Merge name, AES-256 PSK (32 bytes from Keychain), precise location, and uplink/downlink.
+3. `set_channel` only when the merged channel bytes differ. The write is inside the same edit transaction.
+
+Sections the profile does not own (power, network, Bluetooth, security, module config) are read in the `want_config` drain and not written.
 
 ## Reboot / reconnect
 
-- After each reboot-triggering admin set: mark link lost expected; start reconnect timer.
-- Re-match by **BLE peripheral identifier** first; fall back to advertised node name / MAC if the stack renumbers.
+- No reboot when the diff is empty.
+- One reboot after `commit_edit_settings` when any write was sent. A link drop before commit fails the sync.
+- If the commit ack arrives and the link is still up, send `reboot_seconds` so the session still waits once.
+- Re-match by **BLE peripheral identifier**.
 - Timeouts (tuned for a T1000-E class tracker, which can beep and return to Bluetooth well after 20s):
   - first connect, radio already on: 15s
   - admin write ack: 10s
-  - reboot disconnect (`rebootGrace`): 60s after Name, LoRa, Device, Position, and Display
+  - reboot disconnect (`rebootGrace`): 60s after the single commit
   - reconnect (`reconnectTimeout`): 90s, retrying connect and handshake until the radio is back
 - A connect attempt that ends early, or a handshake that drops while the tracker is still booting, does not fail the session while time remains. A handshake that has already started is allowed to finish.
-- On timeout → `failed` with section id; leave radio as-is; user can retry session.
+- The post-reboot handshake does not start another edit transaction.
+- On timeout → `failed`; user can retry the session.
 
 ## Verify (`ProfileAcceptance.evaluate`)
 
@@ -111,7 +105,7 @@ After channel Send, read back and require **all** TAK checks green:
 5. Primary PSK non-default (length/entropy check or “not default key” flag — **do not compare by logging bytes**)  
 6. Precise location on  
 7. Role matches session choice  
-8. Long name matches the callsign entered for this radio  
+8. Long name matches the callsign when this sync changed it. When the long name was left alone, the row passes with the radio’s existing name.  
 9. Rebroadcast LOCAL_ONLY  
 10. Smart Position matches profile  
 11. Position flags: ALTITUDE on, ALTITUDE_MSL off  
@@ -121,9 +115,9 @@ Any fail → `failed` with checklist; stay connected only long enough to show di
 
 ## Fleet loop UX (contract)
 
-1. User selects profile → picks role, long name, and optional short name for **this** device → Scan.  
-2. Connect → apply → verify → show pass/fail.  
-3. Disconnect. On success, store the applied long name and short name on the roster row.  
+1. User selects profile → picks role for **this** device. Long and short name are optional. A roster row or Re-apply fills the last synced names without marking them edited. Scan.  
+2. Connect → read the full config → show what will change → write the diff or skip → verify → show pass/fail.  
+3. Disconnect. On success, store the long name and short name that are on the radio (the value just written, or the value that was already there).  
 4. Prompt: **Next device** (same profile + ask role and name again) or **Done**.  
 5. Never auto-scan-connect the next radio without an explicit tap (avoids wrong-board flash of config).
 
@@ -154,13 +148,13 @@ Characteristics (Meshtastic Client API):
 2. `ToRadio.wantConfigID` (nonce)  
 3. Drain `FromRadio` until config-complete  
 4. Seed **session_passkey** (e.g. `AdminMessage.get_owner_request` with `want_response`; newer firmware requires passkey on mutating admin)  
-5. Only then `set_owner` / `set_config` / `set_channel`
+5. Diff, then either verify immediately or `begin_edit_settings` / differing sets / `commit_edit_settings`
 
 ### Mutating admin
 
-Wrap `AdminMessage` in `MeshPacket` → `DataMessage` with `PortNum.ADMIN_APP`, include `session_passkey`, `want_ack` (and response when needed). Write to ToRadio.
+Wrap `AdminMessage` in `MeshPacket` → `DataMessage` with `PortNum.ADMIN_APP`, include `session_passkey`, `want_response`. Write to ToRadio.
 
-Channel: use the same path the Apple app’s `saveChannel` uses — set channel then ensure it is **Sent** to the radio (Chaos Koalas: device does not reboot for channel, but Send is required).
+All mutating writes in one sync share one `begin_edit_settings` / `commit_edit_settings` pair so the radio reboots at most once. Channel is one of those writes when it differs. It is not a separate reboot.
 
 ### PSK on the wire
 

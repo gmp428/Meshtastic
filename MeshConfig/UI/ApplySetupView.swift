@@ -17,6 +17,9 @@ struct ApplySetupView: View {
     @State private var role: DeviceRole?
     @State private var longNameText = ""
     @State private var shortNameText = ""
+    @State private var longEdited = false
+    @State private var shortEdited = false
+    @State private var programmaticNames = RadioNames(longName: nil, shortName: nil)
     @State private var preferredPeripheralID: UUID?
     @State private var rosterDeviceID: UUID?
     @State private var path = NavigationPath()
@@ -71,22 +74,22 @@ struct ApplySetupView: View {
                     TextField("Long name", text: $longNameText)
                         .textInputAutocapitalization(.words)
                         .autocorrectionDisabled()
-                    TextField("Short name", text: $shortNameText, prompt: Text("First 4 characters"))
+                    TextField("Short name", text: $shortNameText, prompt: Text("Leave blank to keep"))
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
-                    if let names = resolvedNames {
-                        Text("ATAK shows \(names.longName). The mesh badge is \(names.shortName).")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    } else if let nameProblem {
+                    if let nameProblem {
                         Text(nameProblem)
                             .font(.footnote)
                             .foregroundStyle(.red)
+                    } else if let names = resolvedNames {
+                        Text(namePreview(names))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 } header: {
                     Text("Name on TAK")
                 } footer: {
-                    Text("The long name is the Meshtastic name ATAK shows as this radio’s callsign. It is required, and it is chosen for this radio only. The short name is the 4-character badge on the mesh screen. Leave it blank to use the first 4 characters of the long name.")
+                    Text("The long name is the Meshtastic name ATAK shows as this radio’s callsign. The short name is the 4-byte badge on the mesh screen. Leave a field blank to keep the radio’s current value. Leave both blank to skip the name. A known radio fills these from the last sync, and a connected radio’s own names win unless you edit the fields.")
                 }
                 if !roster.devices.isEmpty {
                     Section("Pick from roster") {
@@ -94,8 +97,7 @@ struct ApplySetupView: View {
                             Button {
                                 selectedProfileID = device.profileID
                                 role = device.role
-                                longNameText = device.longName ?? ""
-                                shortNameText = device.shortName ?? ""
+                                fillNames(long: device.longName ?? "", short: device.shortName ?? "")
                                 preferredPeripheralID = device.peripheralID
                                 rosterDeviceID = device.id
                             } label: {
@@ -119,7 +121,7 @@ struct ApplySetupView: View {
                         get: { driver.useSimulation },
                         set: { driver.useSimulation = $0 }
                     ))
-                    Text("Walks connect, apply, reboot, and verify without hardware. Rows are labeled DEBUG. This is not a real radio and it does not prove a protobuf write.")
+                    Text("Walks connect, diff, one reboot when settings differ, and verify without hardware. Rows are labeled DEBUG. This is not a real radio and it does not prove a protobuf write.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -146,6 +148,13 @@ struct ApplySetupView: View {
                     ScanView(
                         preferredPeripheralID: preferredPeripheralID,
                         onPick: { radio in
+                            if let known = roster.device(peripheralID: radio.peripheralID) {
+                                driver.noteRosterMatch(known.id)
+                                rosterDeviceID = known.id
+                                if !longEdited && !shortEdited {
+                                    fillNames(long: known.longName ?? "", short: known.shortName ?? "")
+                                }
+                            }
                             preferredPeripheralID = radio.peripheralID
                             driver.select(radio)
                             path.append(ApplyRoute.progress)
@@ -192,12 +201,17 @@ struct ApplySetupView: View {
                 guard let prefill, driver.isReadyForNextRadio else { return }
                 selectedProfileID = prefill.profileID
                 role = prefill.role
-                longNameText = prefill.longName ?? ""
-                shortNameText = prefill.shortName ?? ""
+                fillNames(long: prefill.longName ?? "", short: prefill.shortName ?? "")
                 preferredPeripheralID = prefill.peripheralID
                 rosterDeviceID = prefill.rosterDeviceID
                 path = NavigationPath()
                 didPushResult = false
+            }
+            .onChange(of: longNameText) { _, _ in
+                markNameEdit()
+            }
+            .onChange(of: shortNameText) { _, _ in
+                markNameEdit()
             }
             .onChange(of: driver.outcome?.passed) { _, passed in
                 guard passed != nil, !didPushResult else { return }
@@ -225,14 +239,45 @@ struct ApplySetupView: View {
         return !profile.channel.isDisallowedPrimaryName
     }
 
+    private func namePreview(_ names: RadioNames) -> String {
+        if names.longName == nil && names.shortName == nil {
+            return "Both blank: this sync will not change the radio’s names."
+        }
+        var parts: [String] = []
+        if let longName = names.longName {
+            parts.append("Long name \(longName)")
+        }
+        if let shortName = names.shortName {
+            parts.append("badge \(shortName)")
+        }
+        return parts.joined(separator: ". ") + ". A blank field stays as it is on the radio."
+    }
+
+    private func fillNames(long: String, short: String) {
+        let resolved = (try? RadioNames.resolve(longName: long, shortName: short))
+            ?? RadioNames(longName: nil, shortName: nil)
+        programmaticNames = resolved
+        longEdited = false
+        shortEdited = false
+        longNameText = long
+        shortNameText = short
+    }
+
+    private func markNameEdit() {
+        guard let resolved = try? RadioNames.resolve(longName: longNameText, shortName: shortNameText) else {
+            longEdited = true
+            shortEdited = true
+            return
+        }
+        longEdited = resolved.longName != programmaticNames.longName
+        shortEdited = resolved.shortName != programmaticNames.shortName
+    }
+
     private var resolvedNames: RadioNames? {
         try? RadioNames.resolve(longName: longNameText, shortName: shortNameText)
     }
 
     private var nameProblem: String? {
-        let longBlank = longNameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let shortBlank = shortNameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if longBlank && shortBlank { return nil }
         do {
             _ = try RadioNames.resolve(longName: longNameText, shortName: shortNameText)
             return nil
@@ -254,7 +299,14 @@ struct ApplySetupView: View {
         guard let profile = selectedProfile, let role else { return }
         do {
             let names = try RadioNames.resolve(longName: longNameText, shortName: shortNameText)
-            try await driver.beginScan(profile: profile, role: role, names: names, rosterDeviceID: rosterDeviceID)
+            try await driver.beginScan(
+                profile: profile,
+                role: role,
+                names: names,
+                longEdited: longEdited,
+                shortEdited: shortEdited,
+                rosterDeviceID: rosterDeviceID
+            )
             library.rememberLastUsed(profile.id)
             didPushResult = false
             path.append(ApplyRoute.scan)
@@ -271,8 +323,7 @@ struct ApplySetupView: View {
 
     private func clearRoleAndReturn() {
         role = nil
-        longNameText = ""
-        shortNameText = ""
+        fillNames(long: "", short: "")
         preferredPeripheralID = nil
         rosterDeviceID = nil
         didPushResult = false
@@ -384,12 +435,21 @@ struct ApplyProgressView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(session.profile.name)
                         .font(.headline)
-                    Text(session.longName)
+                    Text(session.shownLongName.isEmpty ? "Long name unchanged" : session.shownLongName)
                         .font(.body)
-                    Text("Mesh badge \(session.shortName)")
+                    Text(session.shownShortName.isEmpty ? "Short name unchanged" : "Mesh badge \(session.shownShortName)")
                         .font(.subheadline.monospaced())
                         .foregroundStyle(.secondary)
                     RoleChip(role: session.role)
+                    if let progress = session.syncProgress {
+                        Text(progress.summary)
+                            .font(.subheadline.weight(.semibold))
+                        if !progress.titles.isEmpty {
+                            Text(progress.titles.joined(separator: ", "))
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     ProgressView(value: Double(doneCount), total: Double(steps.count))
                         .padding(.top, 4)
                 }
@@ -427,7 +487,7 @@ struct ApplyProgressView: View {
 
     private var steps: [ApplyStepRow] {
         // Read actor-isolated fields on the main actor, then build rows from copies.
-        ApplyStepRow.rows(state: session.state, sections: session.orderedSections)
+        ApplyStepRow.rows(state: session.state, progress: session.syncProgress)
     }
 
     private var doneCount: Int {
@@ -462,16 +522,18 @@ struct ApplyStepRow: Identifiable {
     var status: ApplyStepStatus
     var detail: String?
 
-    static func rows(state: ApplySessionState, sections: [ApplySection]) -> [ApplyStepRow] {
-        var titles = ["Connected & handshake", "Fleet PSK ready"]
-        titles.append(contentsOf: sections.map(\.progressTitle))
-        titles.append("Verify")
-        var ids = ["handshake", "psk"]
-        ids.append(contentsOf: sections.map(\.rawValue))
-        ids.append("verify")
-
-        let failedIndex = failedStepIndex(state, sections: sections)
-        let currentIndex = failedIndex ?? activeStepIndex(state, sections: sections)
+    static func rows(state: ApplySessionState, progress: SyncProgress?) -> [ApplyStepRow] {
+        let titles = [
+            "Connected & handshake",
+            "Fleet PSK ready",
+            "Compare with radio",
+            "Write changes",
+            "Reboot",
+            "Verify",
+        ]
+        let ids = ["handshake", "psk", "compare", "write", "reboot", "verify"]
+        let failedIndex = failedStepIndex(state)
+        let currentIndex = failedIndex ?? activeStepIndex(state)
 
         return titles.indices.map { index in
             let status: ApplyStepStatus
@@ -492,32 +554,49 @@ struct ApplyStepRow: Identifiable {
             } else {
                 status = .waiting
             }
-            let detail = index == currentIndex ? detailText(state) : nil
+            let detail = detailText(state, index: index, status: status, progress: progress)
             return ApplyStepRow(id: ids[index], title: titles[index], status: status, detail: detail)
         }
     }
 
-    private static func failedStepIndex(_ state: ApplySessionState, sections: [ApplySection]) -> Int? {
+    private static func failedStepIndex(_ state: ApplySessionState) -> Int? {
         guard case .failed(let failure) = state else { return nil }
-        return activeStepIndex(failure.stage, sections: sections)
+        return activeStepIndex(failure.stage)
     }
 
-    private static func activeStepIndex(_ state: ApplySessionState, sections: [ApplySection]) -> Int {
+    private static func activeStepIndex(_ state: ApplySessionState) -> Int {
         switch state {
         case .idle, .scanning, .connecting, .handshaking:
             return 0
         case .ensuringPSK:
             return 1
-        case .applying(let section), .waitingReboot(let section), .reconnecting(after: let section):
-            return 2 + (sections.firstIndex(of: section) ?? 0)
+        case .comparing:
+            return 2
+        case .applyingChanges:
+            return 3
+        case .waitingReboot, .reconnecting:
+            return 4
         case .verifying, .succeeded, .disconnecting, .disconnected:
-            return 2 + sections.count
+            return 5
         case .failed:
             return 0
         }
     }
 
-    private static func detailText(_ state: ApplySessionState) -> String? {
+    private static func detailText(
+        _ state: ApplySessionState,
+        index: Int,
+        status: ApplyStepStatus,
+        progress: SyncProgress?
+    ) -> String? {
+        if let progress, status == .done || state == .succeeded {
+            if index == 2 { return progress.summary }
+            if index == 3 {
+                return progress.isEmpty ? "Already up to date" : progress.titles.joined(separator: ", ")
+            }
+            if index == 4, progress.isEmpty { return "No reboot" }
+        }
+        guard status == .current || status == .failed else { return nil }
         switch state {
         case .connecting:
             return "Connecting"
@@ -525,11 +604,12 @@ struct ApplyStepRow: Identifiable {
             return "PhoneAPI handshake"
         case .ensuringPSK:
             return "Checking the Keychain"
-        case .applying(.owner):
-            return "Writing the TAK long name and mesh badge"
-        case .applying(.channel):
-            return "Replacing the default primary and sending the channel"
-        case .applying:
+        case .comparing:
+            return "Reading the radio and comparing"
+        case .applyingChanges:
+            if let progress {
+                return progress.isEmpty ? "Already up to date" : progress.titles.joined(separator: ", ")
+            }
             return "Writing"
         case .waitingReboot:
             return "Waiting for the radio to reboot. Trackers can take a minute."
@@ -562,8 +642,8 @@ struct ApplyResultView: View {
                     .font(.title2.bold())
                 VStack(alignment: .leading, spacing: 8) {
                     LabeledContent("Radio", value: outcome.deviceName)
-                    LabeledContent("Long name", value: outcome.longName)
-                    LabeledContent("Short name", value: outcome.shortName)
+                    LabeledContent("Long name", value: outcome.longName.isEmpty ? "Unchanged" : outcome.longName)
+                    LabeledContent("Short name", value: outcome.shortName.isEmpty ? "Unchanged" : outcome.shortName)
                     LabeledContent("Profile", value: outcome.profileName)
                     LabeledContent("Role") {
                         RoleChip(role: outcome.role)

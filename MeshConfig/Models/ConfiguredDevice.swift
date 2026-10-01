@@ -84,9 +84,10 @@ extension ConfiguredDevice {
 }
 
 /// Per-radio names chosen at Apply time. Not stored on the fleet profile.
+/// A nil field means “do not change this name on the radio.”
 struct RadioNames: Equatable, Sendable {
-    var longName: String
-    var shortName: String
+    var longName: String?
+    var shortName: String?
 
     /// Firmware stores at most 24 UTF-8 bytes and truncates anything longer before rebroadcast.
     static let maxLongNameUTF8Bytes = 24
@@ -94,56 +95,34 @@ struct RadioNames: Equatable, Sendable {
     static let maxShortNameUTF8Bytes = 4
 
     enum Problem: Error, Equatable {
-        case missingLongName
         case longNameTooLong
         case shortNameTooLong
-        case shortNameBlank
     }
 
+    /// Blank fields stay nil. A blank short name is not derived from the long name.
     static func resolve(longName: String, shortName: String) throws -> RadioNames {
         let long = longName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard long.contains(where: { !$0.isWhitespace }) else { throw Problem.missingLongName }
-        guard Data(long.utf8).count <= maxLongNameUTF8Bytes else { throw Problem.longNameTooLong }
-        let typedShort = shortName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let short: String
-        if typedShort.isEmpty {
-            short = derivedShortName(from: long)
-        } else {
-            guard Data(typedShort.utf8).count <= maxShortNameUTF8Bytes else { throw Problem.shortNameTooLong }
-            short = typedShort
+        let short = shortName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !long.isEmpty {
+            guard Data(long.utf8).count <= maxLongNameUTF8Bytes else { throw Problem.longNameTooLong }
         }
-        guard short.contains(where: { !$0.isWhitespace }) else { throw Problem.shortNameBlank }
-        return RadioNames(longName: long, shortName: short)
-    }
-
-    /// First four Unicode scalars of the long name that still fit in four UTF-8 bytes.
-    static func derivedShortName(from longName: String) -> String {
-        var used = 0
-        var characters = 0
-        var result = ""
-        for character in longName {
-            let count = character.utf8.count
-            if used + count > maxShortNameUTF8Bytes { break }
-            result.append(character)
-            used += count
-            characters += 1
-            if characters == 4 { break }
+        if !short.isEmpty {
+            guard Data(short.utf8).count <= maxShortNameUTF8Bytes else { throw Problem.shortNameTooLong }
         }
-        return result
+        return RadioNames(
+            longName: long.isEmpty ? nil : long,
+            shortName: short.isEmpty ? nil : short
+        )
     }
 }
 
 extension RadioNames.Problem: LocalizedError {
     var errorDescription: String? {
         switch self {
-        case .missingLongName:
-            return "Enter the long name for this radio. That is the callsign ATAK shows."
         case .longNameTooLong:
             return "The long name must be 24 bytes or fewer. That is the name ATAK shows."
         case .shortNameTooLong:
             return "The short name must fit in 4 bytes. That is the mesh badge."
-        case .shortNameBlank:
-            return "The short name needs at least one character, or leave it blank to use the first characters of the long name."
         }
     }
 }

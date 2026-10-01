@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 // MARK: - One-radio BLE apply session (sequential fleet; never two at once)
@@ -8,48 +9,16 @@ enum ApplySessionState: Equatable, Sendable {
     case connecting
     case handshaking          // wantConfig + drain FromRadio + seed session_passkey
     case ensuringPSK
-    case applying(ApplySection)
-    case waitingReboot(ApplySection)
-    case reconnecting(after: ApplySection)
+    case comparing            // diff the radio against the profile; no writes yet
+    case applyingChanges      // one begin/commit edit transaction
+    case waitingReboot        // commit asked the radio to reboot
+    case reconnecting
     case verifying
     case succeeded
     /// Indirect: ApplyFailure stores the stage, so this case makes the type recursive.
     indirect case failed(ApplyFailure)
     case disconnecting
     case disconnected
-}
-
-enum ApplySection: String, Codable, CaseIterable, Sendable {
-    case owner, lora, device, position, display, channel
-
-    var expectsReboot: Bool {
-        switch self {
-        case .owner, .lora, .device, .position, .display: return true
-        case .channel: return false
-        }
-    }
-
-    var displayName: String {
-        switch self {
-        case .owner: return "Name"
-        case .lora: return "LoRa"
-        case .device: return "Device"
-        case .position: return "Position"
-        case .display: return "Display"
-        case .channel: return "Channel"
-        }
-    }
-
-    var progressTitle: String {
-        switch self {
-        case .owner: return "TAK long name"
-        case .lora: return "LoRa"
-        case .device: return "Device role + rebroadcast"
-        case .position: return "Position"
-        case .display: return "Display"
-        case .channel: return "Channel Send"
-        }
-    }
 }
 
 struct ApplyFailure: Error, Equatable, Sendable {
@@ -63,53 +32,63 @@ struct ApplySessionConfig: Sendable {
     /// First connect, while the radio is already on and advertising.
     var connectTimeout: TimeInterval = 15
     var writeAckTimeout: TimeInterval = 10
-    /// How long to wait for Bluetooth to drop after a reboot section.
-    /// Trackers such as the T1000-E beep and reboot well after a 20s grace.
+    /// How long to wait for Bluetooth to drop after the single commit reboot.
     var rebootGrace: TimeInterval = 60
     /// How long to keep trying Bluetooth after that drop, including a slow boot.
-    /// A single missed connect does not end the wait.
     var reconnectTimeout: TimeInterval = 90
-    /// Default order: name, then reboot sections, channel last (Send, no reboot), then verify.
-    var sectionOrder: [ApplySection] = [.owner, .lora, .device, .position, .display, .channel]
 }
 
-/// Orchestrates scan → connect → handshake → ensure PSK → apply → verify → disconnect.
+/// Orchestrates scan → connect → handshake → diff → one transaction → verify → disconnect.
 /// BLE transport is injected (CoreBluetooth + Meshtastic protobuf); this type owns policy.
 @MainActor
 final class ApplySession: ObservableObject {
     @Published private(set) var state: ApplySessionState = .idle
-    @Published private(set) var progressIndex: Int = 0
     @Published private(set) var lastChecklist: [VerifyCheckResult] = []
+    @Published private(set) var shownLongName: String = ""
+    @Published private(set) var shownShortName: String = ""
+    @Published private(set) var syncProgress: SyncProgress?
 
     let profile: FleetProfile
     let role: DeviceRole
-    /// Meshtastic long name for this radio. TAK shows this as the callsign.
-    let longName: String
-    /// Meshtastic short name for this radio. The 4-character mesh badge.
-    let shortName: String
     let config: ApplySessionConfig
 
-    /// Section that triggered the reboot we are reconnecting after.
-    /// `onConnected` moves `.reconnecting` to `.handshaking`, so the origin has to be stored
-    /// or the next handshake would start the profile over from LoRa.
-    private var rebootResumeSection: ApplySection?
-
-    private var sections: [ApplySection] { config.sectionOrder }
-
-    var orderedSections: [ApplySection] { sections }
+    private let requestedLongName: String?
+    private let requestedShortName: String?
+    /// False when that field was filled from the roster and the user has not typed in it.
+    private let longEdited: Bool
+    private let shortEdited: Bool
+    /// Set after commit so the post-reboot handshake verifies instead of writing again.
+    private var resumeToVerify = false
+    private var radioLongName: String?
+    private var radioShortName: String?
+    private var writtenLongName: String?
+    private var writtenShortName: String?
 
     init(
         profile: FleetProfile,
         role: DeviceRole,
         names: RadioNames,
+        longEdited: Bool,
+        shortEdited: Bool,
         config: ApplySessionConfig = .init()
     ) {
         self.profile = profile
         self.role = role
-        self.longName = names.longName
-        self.shortName = names.shortName
+        self.requestedLongName = names.longName
+        self.requestedShortName = names.shortName
+        self.longEdited = longEdited
+        self.shortEdited = shortEdited
         self.config = config
+        self.shownLongName = names.longName ?? ""
+        self.shownShortName = names.shortName ?? ""
     }
+
+    var nameRequest: RadioNames {
+        RadioNames(longName: requestedLongName, shortName: requestedShortName)
+    }
+
+    var didEditLongName: Bool { longEdited }
+    var didEditShortName: Bool { shortEdited }
 
     /// Hard gate: fleet UI must not start another session until this is true.
     var canStartAnotherRadio: Bool {
@@ -125,6 +104,24 @@ final class ApplySession: ObservableObject {
         case .idle, .disconnected: return true
         default: return false
         }
+    }
+
+    /// Names to remember after a passing verify. Unchanged fields keep the radio's current value.
+    var namesForRoster: RadioNames? {
+        let long = writtenLongName ?? radioLongName
+        let short = writtenShortName ?? radioShortName
+        let hasLong = long?.isEmpty == false
+        let hasShort = short?.isEmpty == false
+        guard hasLong || hasShort else { return nil }
+        return RadioNames(longName: hasLong ? long : nil, shortName: hasShort ? short : nil)
+    }
+
+    var resultLongName: String {
+        writtenLongName ?? radioLongName ?? requestedLongName ?? ""
+    }
+
+    var resultShortName: String {
+        writtenShortName ?? radioShortName ?? requestedShortName ?? ""
     }
 
     // MARK: Public API (UI calls)
@@ -144,7 +141,7 @@ final class ApplySession: ObservableObject {
     func onConnected() {
         guard state == .connecting || isReconnecting else { return }
         if case .connecting = state {
-            rebootResumeSection = nil
+            resumeToVerify = false
         }
         state = .handshaking
     }
@@ -152,63 +149,68 @@ final class ApplySession: ObservableObject {
     /// After wantConfig drain + session_passkey seeded.
     func onHandshakeComplete() async {
         guard state == .handshaking else { return }
-        if let after = rebootResumeSection {
-            // Resume next section after the one that rebooted.
-            rebootResumeSection = nil
-            await advanceAfterReboot(from: after)
+        if resumeToVerify {
+            resumeToVerify = false
+            state = .verifying
             return
         }
         state = .ensuringPSK
         do {
             var mutable = profile
             try FleetPSKStore.ensurePSK(for: &mutable)
-            // Persist updated pskRef via profile store before the session starts.
-            // Account is `fleet-psk.<profileUUID>`; raw bytes stay in Keychain.
-            progressIndex = 0
-            try await applyNextSections(from: 0)
+            state = .comparing
         } catch {
             fail(stage: .ensuringPSK, message: "Could not ensure fleet PSK in Keychain.", checks: [])
         }
     }
 
-    func onWriteAcknowledged(section: ApplySection) {
-        guard case .applying(let current) = state, current == section else { return }
-        if section.expectsReboot {
-            state = .waitingReboot(section)
-        } else {
-            // Channel: no reboot → verify
-            state = .verifying
-        }
+    /// Owner strings read from the radio. Unedited fields display these instead of a stale roster prefill.
+    func noteRadioOwner(longName: String?, shortName: String?) {
+        radioLongName = longName
+        radioShortName = shortName
+        refreshShownNames()
+    }
+
+    func adoptPlan(_ plan: SyncPlan) {
+        guard state == .comparing else { return }
+        writtenLongName = plan.writtenLongName
+        writtenShortName = plan.writtenShortName
+        syncProgress = plan.progress
+        refreshShownNames()
+        state = plan.isEmpty ? .verifying : .applyingChanges
+    }
+
+    func onChangesCommitted() {
+        guard state == .applyingChanges else { return }
+        resumeToVerify = true
+        state = .waitingReboot
     }
 
     func onLinkLost() {
-        if case .waitingReboot(let section) = state {
-            rebootResumeSection = section
-            state = .reconnecting(after: section)
+        if case .waitingReboot = state {
+            state = .reconnecting
             return
         }
-        // The radio can drop again while it is still booting. That is part of the reconnect,
-        // not a failed session, until the next handshake finishes.
-        if let section = rebootResumeSection {
+        // The radio can drop again while it is still booting. That is part of the reconnect.
+        if resumeToVerify {
             switch state {
             case .handshaking, .reconnecting:
-                state = .reconnecting(after: section)
+                state = .reconnecting
                 return
             default:
                 break
             }
         }
-        // Unexpected drop mid-apply
         if !isTerminal && state != .disconnecting && state != .disconnected {
             fail(stage: state, message: "BLE link lost unexpectedly.", checks: [])
         }
     }
 
-    /// Handshake failed before the post-reboot window ended. Stay on this section and try again.
+    /// Handshake failed before the post-reboot window ended. Stay in reconnect and try again.
     func resumeReconnectWait() {
-        guard let section = rebootResumeSection else { return }
+        guard resumeToVerify else { return }
         if case .handshaking = state {
-            state = .reconnecting(after: section)
+            state = .reconnecting
         }
     }
 
@@ -218,7 +220,7 @@ final class ApplySession: ObservableObject {
             profile: profile,
             snap: snapshot,
             appliedRole: role,
-            appliedLongName: longName
+            appliedLongName: writtenLongName
         )
         lastChecklist = results
         if results.allSatisfy(\.ok) {
@@ -256,28 +258,17 @@ final class ApplySession: ObservableObject {
         return false
     }
 
-    private func advanceAfterReboot(from section: ApplySection) async {
-        guard let idx = sections.firstIndex(of: section) else {
-            fail(stage: .waitingReboot(section), message: "Unknown section after reboot.", checks: [])
-            return
+    private func refreshShownNames() {
+        if longEdited {
+            shownLongName = writtenLongName ?? requestedLongName ?? radioLongName ?? ""
+        } else {
+            shownLongName = radioLongName ?? requestedLongName ?? ""
         }
-        let next = idx + 1
-        progressIndex = next
-        try? await applyNextSections(from: next)
-    }
-
-    private func applyNextSections(from index: Int) async throws {
-        guard index < sections.count else {
-            state = .verifying
-            return
+        if shortEdited {
+            shownShortName = writtenShortName ?? requestedShortName ?? radioShortName ?? ""
+        } else {
+            shownShortName = radioShortName ?? requestedShortName ?? ""
         }
-        let section = sections[index]
-        progressIndex = index
-        state = .applying(section)
-        // Real app: build AdminMessage set_config / set_channel with session_passkey,
-        // wrap PortNum.ADMIN_APP, write ToRadio, wait ack. Channel must Send after set.
-        // Transport callback → onWriteAcknowledged(section).
-        // ApplyDriver performs that write while state stays `.applying`.
     }
 
     private func fail(stage: ApplySessionState, message: String, checks: [String]) {
@@ -294,26 +285,10 @@ protocol MeshtasticBLETransport: AnyObject {
     func connect(peripheralID: UUID, timeout: TimeInterval) async throws
     /// Write ToRadio.wantConfigID; drain FromRadio until config complete; seed session_passkey via get_owner.
     func handshake() async throws
-    func setLoRa(_ settings: LoRaSettings) async throws
-    func setDevice(role: DeviceRole, settings: DeviceSettings) async throws
-    func setPosition(_ settings: PositionSettings) async throws
-    func setDisplay(_ settings: DisplaySettings) async throws
-    /// `AdminMessage.set_owner` with session_passkey. Long name is the TAK callsign; short name is the mesh badge.
-    func setOwner(longName: String, shortName: String) async throws
-    /// Replace default primary if needed; write ChannelSettings including 32-byte PSK; Send to device.
-    func setPrimaryChannel(_ settings: ChannelSettings, psk: Data) async throws
+    /// Full config captured by the last handshake. Nil before handshake and after disconnect.
+    func radioInventory() -> RadioInventory?
+    /// `begin_edit_settings`, the differing writes, then `commit_edit_settings`. Empty input writes nothing.
+    func applyTransaction(_ writes: [SyncWrite]) async throws
     func readSnapshot() async throws -> DeviceSnapshot
     func disconnect() async
 }
-
-/*
- BLE endpoints (Meshtastic PhoneAPI):
- - ToRadio characteristic  — write wantConfig / MeshPacket admin
- - FromRadio               — read until empty after wantConfig
- - FromNum                 — notify when FromRadio has data
-
- Admin path: AdminMessage { session_passkey, set_config | set_channel | … }
-   → DataMessage portnum = ADMIN_APP → MeshPacket → ToRadio
-
- After reboot: link drops; full handshake again before next set_*.
- */

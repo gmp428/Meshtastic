@@ -3,9 +3,8 @@ import Foundation
 
 /// CoreBluetooth central for the Meshtastic PhoneAPI service.
 ///
-/// Scan and GATT are real. Handshake, `set_config`, channel send, and read-back use
-/// `PhoneAPICodec` (ToRadio / FromRadio / AdminMessage). The DEBUG simulated transport
-/// is a separate type and does not use this class.
+/// Scan and GATT are real. Handshake reads the full config, then one edit transaction
+/// writes only the fields that differ. The DEBUG simulated transport is a separate type.
 ///
 /// Service and characteristic UUIDs match the public Meshtastic client API:
 /// https://meshtastic.org/docs/development/device/client-api/
@@ -51,6 +50,10 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
     private var displayConfig: Data?
     /// Last `User` body from get_owner. Merged into set_owner so id, keys, and license flags stay put.
     private var ownerUser: Data?
+    private var capturedChannels: [Data] = []
+    private var observedConfigFields: Set<Int> = []
+    private var observedModuleFields: Set<Int> = []
+    private var inventory: RadioInventory?
     private let gate = NSLock()
 
     func startScan() async {
@@ -148,6 +151,12 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
             case .config(let slice):
                 store(slice)
                 sawMyNode = true
+            case .otherConfig(let field):
+                observedConfigFields.insert(field)
+            case .moduleConfig(let field):
+                observedModuleFields.insert(field)
+            case .channel(let channel):
+                capturedChannels.append(channel.raw)
             case .configComplete(let id) where id == nonce && sawMyNode:
                 sawComplete = true
             case .notice(let text):
@@ -162,12 +171,12 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         guard let nodeNum, nodeNum != 0 else {
             throw MeshtasticBLEError.adminFailed("The radio did not report its node number.")
         }
+        _ = nodeNum
         guard loraConfig != nil, deviceConfig != nil, positionConfig != nil, displayConfig != nil else {
             throw MeshtasticBLEError.adminFailed(
                 "Handshake did not include LoRa, device, position, and display config. Mesh Config will not send a partial config."
             )
         }
-        _ = nodeNum
         let owner = try await roundTrip(
             admin: PhoneAPICodec.getOwnerAdmin(),
             wantResponse: true,
@@ -177,114 +186,81 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         if let key = owner?.passkey, key.count == 8 {
             adoptPasskey(key)
         }
-        if let user = owner?.owner, !user.isEmpty {
-            ownerUser = user
+        guard let user = owner?.owner, !user.isEmpty else {
+            throw MeshtasticBLEError.adminFailed("The radio did not return its owner record.")
         }
+        ownerUser = user
         guard sessionPasskey.count == 8 else {
             throw MeshtasticBLEError.adminFailed("The radio did not return an admin session passkey.")
         }
-    }
-
-    func setLoRa(_ settings: LoRaSettings) async throws {
-        try await writeRebootingConfig {
-            guard let existing = self.loraConfig else {
-                throw MeshtasticBLEError.adminFailed(
-                    "Handshake did not include LoRa config, so Mesh Config will not overwrite the radio with a partial config."
-                )
-            }
-            let body = try PhoneAPICodec.loraConfig(merging: existing, settings: settings)
-            try await self.sendConfig(kind: .lora, body: body)
-        }
-    }
-
-    func setDevice(role: DeviceRole, settings: DeviceSettings) async throws {
-        try await writeRebootingConfig {
-            guard let existing = self.deviceConfig else {
-                throw MeshtasticBLEError.adminFailed(
-                    "Handshake did not include device config, so Mesh Config will not overwrite the radio with a partial config."
-                )
-            }
-            let body = try PhoneAPICodec.deviceConfig(merging: existing, role: role, settings: settings)
-            try await self.sendConfig(kind: .device, body: body)
-        }
-    }
-
-    func setPosition(_ settings: PositionSettings) async throws {
-        try await writeRebootingConfig {
-            guard let existing = self.positionConfig else {
-                throw MeshtasticBLEError.adminFailed(
-                    "Handshake did not include position config, so Mesh Config will not overwrite the radio with a partial config."
-                )
-            }
-            let body = try PhoneAPICodec.positionConfig(merging: existing, settings: settings)
-            try await self.sendConfig(kind: .position, body: body)
-        }
-    }
-
-    func setDisplay(_ settings: DisplaySettings) async throws {
-        try await writeRebootingConfig {
-            guard let existing = self.displayConfig else {
-                throw MeshtasticBLEError.adminFailed(
-                    "Handshake did not include display config, so Mesh Config will not overwrite the radio with a partial config."
-                )
-            }
-            let body = try PhoneAPICodec.displayConfig(merging: existing, settings: settings)
-            try await self.sendConfig(kind: .display, body: body)
-        }
-    }
-
-    func setOwner(longName: String, shortName: String) async throws {
-        let longBytes = Data(longName.utf8)
-        let shortBytes = Data(shortName.utf8)
-        guard !longName.isEmpty, longBytes.count <= RadioNames.maxLongNameUTF8Bytes else {
-            throw MeshtasticBLEError.adminFailed("The long name must be 1 to 24 bytes.")
-        }
-        guard !shortName.isEmpty, shortBytes.count <= RadioNames.maxShortNameUTF8Bytes else {
-            throw MeshtasticBLEError.adminFailed("The short name must be 1 to 4 bytes.")
-        }
-        try await writeRebootingConfig {
-            let user = try PhoneAPICodec.userMessage(
-                merging: self.ownerUser ?? Data(),
-                longName: longName,
-                shortName: shortName
+        guard let loraConfig, let deviceConfig, let positionConfig, let displayConfig else {
+            throw MeshtasticBLEError.adminFailed(
+                "Handshake did not include LoRa, device, position, and display config. Mesh Config will not send a partial config."
             )
-            let admin = PhoneAPICodec.setOwnerAdmin(user: user, passkey: self.sessionPasskey)
-            _ = try await self.roundTrip(admin: admin, wantResponse: true, wantBody: false, linkDropSucceeds: true)
         }
+        inventory = RadioInventory(
+            lora: loraConfig,
+            device: deviceConfig,
+            position: positionConfig,
+            display: displayConfig,
+            owner: user,
+            longName: try PhoneAPICodec.longName(from: user),
+            shortName: try PhoneAPICodec.shortName(from: user),
+            channels: capturedChannels,
+            observedConfigFields: observedConfigFields,
+            observedModuleFields: observedModuleFields
+        )
     }
 
-    func setPrimaryChannel(_ settings: ChannelSettings, psk: Data) async throws {
+    func radioInventory() -> RadioInventory? {
+        inventory
+    }
+
+    func applyTransaction(_ writes: [SyncWrite]) async throws {
+        guard !writes.isEmpty else { return }
         try requireLink()
-        guard psk.count == 32 else { throw MeshtasticBLEError.invalidPSKLength }
         guard sessionPasskey.count == 8 else {
             throw MeshtasticBLEError.adminFailed("The admin session is missing. Reconnect and try this radio again.")
         }
-        let channelID = UInt32.random(in: 1...UInt32.max)
-        let channel: Data
+        // commit_edit_settings disables Bluetooth. A drop before that commit is a failed sync.
+        adminExpectsReboot = true
+        defer { adminExpectsReboot = false }
+        var didCommit = false
         do {
-            channel = try PhoneAPICodec.channelMessage(
-                name: settings.name,
-                psk: psk,
-                uplink: settings.uplinkEnabled,
-                downlink: settings.downlinkEnabled,
-                preciseLocation: settings.preciseLocation,
-                channelID: channelID
-            )
-        } catch PhoneAPICodec.CodecError.channelNameTooLong {
-            throw MeshtasticBLEError.adminFailed("The channel name must be shorter than 12 bytes.")
-        }
-        let admin = PhoneAPICodec.setChannelAdmin(channel: channel, passkey: sessionPasskey)
-        do {
-            // want_response asks AdminModule for a Routing NONE after the channel is saved.
-            // A want_ack by itself can be emitted before the admin module accepts the write.
             _ = try await roundTrip(
-                admin: admin,
+                admin: PhoneAPICodec.beginEditAdmin(passkey: sessionPasskey),
                 wantResponse: true,
                 wantBody: false,
                 linkDropSucceeds: false
             )
-        } catch MeshtasticBLEError.notConnected {
-            throw MeshtasticBLEError.adminFailed("The radio dropped the Bluetooth link during the channel send.")
+            for write in writes {
+                if linkDropped {
+                    throw MeshtasticBLEError.adminFailed(
+                        "The radio dropped the Bluetooth link before the settings were committed."
+                    )
+                }
+                try await send(write)
+            }
+            didCommit = true
+            _ = try await roundTrip(
+                admin: PhoneAPICodec.commitEditAdmin(passkey: sessionPasskey),
+                wantResponse: true,
+                wantBody: false,
+                linkDropSucceeds: true
+            )
+            if linkDropped { return }
+            _ = try await roundTrip(
+                admin: PhoneAPICodec.rebootAdmin(
+                    seconds: PhoneAPICodec.rebootDelaySeconds,
+                    passkey: sessionPasskey
+                ),
+                wantResponse: true,
+                wantBody: false,
+                linkDropSucceeds: true
+            )
+        } catch {
+            if didCommit && linkDropped { return }
+            throw mapCodec(error)
         }
     }
 
@@ -346,49 +322,34 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
 
     // MARK: - Admin session
 
-    /// Current firmware reboots on role, rebroadcast, and position changes. LoRa changes apply
-    /// live, and a units-only display write stays connected. Apply still expects the link to
-    /// drop after each of those sections, so a saved config that did not tear Bluetooth down
-    /// is followed by reboot_seconds.
-    private func writeRebootingConfig(_ body: @MainActor () async throws -> Void) async throws {
-        try requireLink()
-        guard sessionPasskey.count == 8 else {
-            throw MeshtasticBLEError.adminFailed("The admin session is missing. Reconnect and try this radio again.")
+    private var linkDropped: Bool { sawLinkDrop || connectedPeripheral == nil }
+
+    /// Writes inside the open edit transaction. A link drop here is a failure, not a reboot.
+    private func send(_ write: SyncWrite) async throws {
+        let admin: Data
+        switch write {
+        case .owner(let user):
+            admin = PhoneAPICodec.setOwnerAdmin(user: user, passkey: sessionPasskey)
+        case .config(let kind, let body):
+            admin = PhoneAPICodec.setConfigAdmin(
+                config: PhoneAPICodec.configWrapper(kind: kind, body: body),
+                passkey: sessionPasskey
+            )
+        case .channel(let channel):
+            admin = PhoneAPICodec.setChannelAdmin(channel: channel, passkey: sessionPasskey)
         }
-        adminExpectsReboot = true
-        defer { adminExpectsReboot = false }
-        do {
-            try await body()
-        } catch {
-            if linkDropped { return }
-            throw mapCodec(error)
-        }
-        if linkDropped { return }
-        let admin = PhoneAPICodec.rebootAdmin(
-            seconds: PhoneAPICodec.rebootDelaySeconds,
-            passkey: sessionPasskey
-        )
         do {
             _ = try await roundTrip(
                 admin: admin,
                 wantResponse: true,
                 wantBody: false,
-                linkDropSucceeds: true
+                linkDropSucceeds: false
             )
-        } catch {
-            if linkDropped { return }
-            throw error
+        } catch MeshtasticBLEError.notConnected {
+            throw MeshtasticBLEError.adminFailed(
+                "The radio dropped the Bluetooth link before the settings were committed."
+            )
         }
-    }
-
-    private var linkDropped: Bool { sawLinkDrop || connectedPeripheral == nil }
-
-    private func sendConfig(kind: PhoneAPICodec.ConfigKind, body: Data) async throws {
-        let admin = PhoneAPICodec.setConfigAdmin(
-            config: PhoneAPICodec.configWrapper(kind: kind, body: body),
-            passkey: sessionPasskey
-        )
-        _ = try await roundTrip(admin: admin, wantResponse: true, wantBody: false, linkDropSucceeds: true)
     }
 
     private func fetchConfig(_ kind: PhoneAPICodec.ConfigKind) async throws -> Data {
@@ -520,10 +481,18 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
 
     private func store(_ slice: PhoneAPICodec.ConfigSlice) {
         switch slice.kind {
-        case .lora: loraConfig = slice.body
-        case .device: deviceConfig = slice.body
-        case .position: positionConfig = slice.body
-        case .display: displayConfig = slice.body
+        case .lora:
+            loraConfig = slice.body
+            observedConfigFields.insert(6)
+        case .device:
+            deviceConfig = slice.body
+            observedConfigFields.insert(1)
+        case .position:
+            positionConfig = slice.body
+            observedConfigFields.insert(2)
+        case .display:
+            displayConfig = slice.body
+            observedConfigFields.insert(5)
         }
     }
 
@@ -557,12 +526,31 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         deviceConfig = nil
         positionConfig = nil
         displayConfig = nil
-        if let indices = ownerUser?.indices {
-            for index in indices {
-                ownerUser?[index] = 0
+        observedConfigFields = []
+        observedModuleFields = []
+        for channelIndex in capturedChannels.indices {
+            for byteIndex in capturedChannels[channelIndex].indices {
+                capturedChannels[channelIndex][byteIndex] = 0
             }
         }
-        ownerUser = nil
+        capturedChannels = []
+        if inventory != nil {
+            for byteIndex in inventory!.owner.indices {
+                inventory!.owner[byteIndex] = 0
+            }
+            for channelIndex in inventory!.channels.indices {
+                for byteIndex in inventory!.channels[channelIndex].indices {
+                    inventory!.channels[channelIndex][byteIndex] = 0
+                }
+            }
+            inventory = nil
+        }
+        if ownerUser != nil {
+            for index in ownerUser!.indices {
+                ownerUser![index] = 0
+            }
+            ownerUser = nil
+        }
     }
 
     private func noticeSuffix(_ message: String) -> String {
