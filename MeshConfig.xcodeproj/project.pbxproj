@@ -1,0 +1,470 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		E10000000000000000000200 /* MeshConfigApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000100 /* MeshConfigApp.swift */; };
+		E10000000000000000000201 /* FleetProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000101 /* FleetProfile.swift */; };
+		E10000000000000000000202 /* ConfiguredDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000102 /* ConfiguredDevice.swift */; };
+		E10000000000000000000203 /* FleetPSKStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000103 /* FleetPSKStore.swift */; };
+		E10000000000000000000213 /* GatewaySecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000113 /* GatewaySecretStore.swift */; };
+		E10000000000000000000204 /* ApplySession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000104 /* ApplySession.swift */; };
+		E10000000000000000000205 /* FleetRadioTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000105 /* FleetRadioTransport.swift */; };
+		E10000000000000000000206 /* CoreBluetoothMeshtasticTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000106 /* CoreBluetoothMeshtasticTransport.swift */; };
+		E10000000000000000000211 /* PhoneAPICodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000111 /* PhoneAPICodec.swift */; };
+		E10000000000000000000212 /* SyncDiff.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000112 /* SyncDiff.swift */; };
+		E10000000000000000000207 /* SimulatedMeshtasticTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000107 /* SimulatedMeshtasticTransport.swift */; };
+		E10000000000000000000208 /* ApplyDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000108 /* ApplyDriver.swift */; };
+		E10000000000000000000209 /* FleetLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000109 /* FleetLibrary.swift */; };
+		E1000000000000000000020A /* DeviceRosterStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1000000000000000000010A /* DeviceRosterStore.swift */; };
+		E1000000000000000000020B /* RootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1000000000000000000010B /* RootTabView.swift */; };
+		E1000000000000000000020C /* ProfilesListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1000000000000000000010C /* ProfilesListView.swift */; };
+		E1000000000000000000020D /* ProfileEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1000000000000000000010D /* ProfileEditorView.swift */; };
+		E1000000000000000000020E /* DevicesRosterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1000000000000000000010E /* DevicesRosterView.swift */; };
+		E1000000000000000000020F /* ApplySetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1000000000000000000010F /* ApplySetupView.swift */; };
+		E10000000000000000000210 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000110 /* SettingsView.swift */; };
+		E10000000000000000000031 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000030 /* Assets.xcassets */; };
+		E10000000000000000000034 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000033 /* PrivacyInfo.xcprivacy */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		E10000000000000000000001 /* MeshConfig.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MeshConfig.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E10000000000000000000100 /* MeshConfigApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshConfigApp.swift; sourceTree = "<group>"; };
+		E10000000000000000000101 /* FleetProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetProfile.swift; sourceTree = "<group>"; };
+		E10000000000000000000102 /* ConfiguredDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfiguredDevice.swift; sourceTree = "<group>"; };
+		E10000000000000000000103 /* FleetPSKStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetPSKStore.swift; sourceTree = "<group>"; };
+		E10000000000000000000113 /* GatewaySecretStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatewaySecretStore.swift; sourceTree = "<group>"; };
+		E10000000000000000000104 /* ApplySession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplySession.swift; sourceTree = "<group>"; };
+		E10000000000000000000105 /* FleetRadioTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRadioTransport.swift; sourceTree = "<group>"; };
+		E10000000000000000000106 /* CoreBluetoothMeshtasticTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreBluetoothMeshtasticTransport.swift; sourceTree = "<group>"; };
+		E10000000000000000000111 /* PhoneAPICodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneAPICodec.swift; sourceTree = "<group>"; };
+		E10000000000000000000112 /* SyncDiff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncDiff.swift; sourceTree = "<group>"; };
+		E10000000000000000000107 /* SimulatedMeshtasticTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatedMeshtasticTransport.swift; sourceTree = "<group>"; };
+		E10000000000000000000108 /* ApplyDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplyDriver.swift; sourceTree = "<group>"; };
+		E10000000000000000000109 /* FleetLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetLibrary.swift; sourceTree = "<group>"; };
+		E1000000000000000000010A /* DeviceRosterStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceRosterStore.swift; sourceTree = "<group>"; };
+		E1000000000000000000010B /* RootTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootTabView.swift; sourceTree = "<group>"; };
+		E1000000000000000000010C /* ProfilesListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfilesListView.swift; sourceTree = "<group>"; };
+		E1000000000000000000010D /* ProfileEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditorView.swift; sourceTree = "<group>"; };
+		E1000000000000000000010E /* DevicesRosterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesRosterView.swift; sourceTree = "<group>"; };
+		E1000000000000000000010F /* ApplySetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplySetupView.swift; sourceTree = "<group>"; };
+		E10000000000000000000110 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		E10000000000000000000030 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		E10000000000000000000032 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		E10000000000000000000033 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		E10000000000000000000300 /* APPLY_VERIFY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = APPLY_VERIFY.md; sourceTree = "<group>"; };
+		E10000000000000000000301 /* PSK_POLICY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = PSK_POLICY.md; sourceTree = "<group>"; };
+		E10000000000000000000302 /* SCREENS_UX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = SCREENS_UX.md; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		E10000000000000000000013 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		E10000000000000000000002 /* Main */ = {
+			isa = PBXGroup;
+			children = (
+				E10000000000000000000004 /* MeshConfig */,
+				E1000000000000000000000A /* docs */,
+				E10000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		E10000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				E10000000000000000000001 /* MeshConfig.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		E10000000000000000000004 /* MeshConfig */ = {
+			isa = PBXGroup;
+			children = (
+				E10000000000000000000100 /* MeshConfigApp.swift */,
+				E10000000000000000000005 /* Models */,
+				E10000000000000000000006 /* Security */,
+				E10000000000000000000007 /* Apply */,
+				E10000000000000000000008 /* Persistence */,
+				E10000000000000000000009 /* UI */,
+				E10000000000000000000030 /* Assets.xcassets */,
+				E10000000000000000000032 /* Info.plist */,
+				E10000000000000000000033 /* PrivacyInfo.xcprivacy */,
+			);
+			path = MeshConfig;
+			sourceTree = "<group>";
+		};
+		E10000000000000000000005 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				E10000000000000000000101 /* FleetProfile.swift */,
+				E10000000000000000000102 /* ConfiguredDevice.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		E10000000000000000000006 /* Security */ = {
+			isa = PBXGroup;
+			children = (
+				E10000000000000000000103 /* FleetPSKStore.swift */,
+				E10000000000000000000113 /* GatewaySecretStore.swift */,
+			);
+			path = Security;
+			sourceTree = "<group>";
+		};
+		E10000000000000000000007 /* Apply */ = {
+			isa = PBXGroup;
+			children = (
+				E10000000000000000000104 /* ApplySession.swift */,
+				E10000000000000000000105 /* FleetRadioTransport.swift */,
+				E10000000000000000000106 /* CoreBluetoothMeshtasticTransport.swift */,
+				E10000000000000000000111 /* PhoneAPICodec.swift */,
+				E10000000000000000000112 /* SyncDiff.swift */,
+				E10000000000000000000107 /* SimulatedMeshtasticTransport.swift */,
+				E10000000000000000000108 /* ApplyDriver.swift */,
+			);
+			path = Apply;
+			sourceTree = "<group>";
+		};
+		E10000000000000000000008 /* Persistence */ = {
+			isa = PBXGroup;
+			children = (
+				E10000000000000000000109 /* FleetLibrary.swift */,
+				E1000000000000000000010A /* DeviceRosterStore.swift */,
+			);
+			path = Persistence;
+			sourceTree = "<group>";
+		};
+		E10000000000000000000009 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				E1000000000000000000010B /* RootTabView.swift */,
+				E1000000000000000000010C /* ProfilesListView.swift */,
+				E1000000000000000000010D /* ProfileEditorView.swift */,
+				E1000000000000000000010E /* DevicesRosterView.swift */,
+				E1000000000000000000010F /* ApplySetupView.swift */,
+				E10000000000000000000110 /* SettingsView.swift */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		E1000000000000000000000A /* docs */ = {
+			isa = PBXGroup;
+			children = (
+				E10000000000000000000300 /* APPLY_VERIFY.md */,
+				E10000000000000000000301 /* PSK_POLICY.md */,
+				E10000000000000000000302 /* SCREENS_UX.md */,
+			);
+			path = docs;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		E10000000000000000000010 /* MeshConfig */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E10000000000000000000015 /* Build configuration list for PBXNativeTarget "MeshConfig" */;
+			buildPhases = (
+				E10000000000000000000011 /* Sources */,
+				E10000000000000000000013 /* Frameworks */,
+				E10000000000000000000012 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MeshConfig;
+			productName = MeshConfig;
+			productReference = E10000000000000000000001 /* MeshConfig.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E10000000000000000000014 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					E10000000000000000000010 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+				};
+			};
+			buildConfigurationList = E10000000000000000000016 /* Build configuration list for PBXProject "MeshConfig" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = E10000000000000000000002;
+			productRefGroup = E10000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				E10000000000000000000010 /* MeshConfig */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		E10000000000000000000012 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E10000000000000000000031 /* Assets.xcassets in Resources */,
+				E10000000000000000000034 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		E10000000000000000000011 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E10000000000000000000200 /* MeshConfigApp.swift in Sources */,
+				E10000000000000000000201 /* FleetProfile.swift in Sources */,
+				E10000000000000000000202 /* ConfiguredDevice.swift in Sources */,
+				E10000000000000000000203 /* FleetPSKStore.swift in Sources */,
+				E10000000000000000000213 /* GatewaySecretStore.swift in Sources */,
+				E10000000000000000000204 /* ApplySession.swift in Sources */,
+				E10000000000000000000205 /* FleetRadioTransport.swift in Sources */,
+				E10000000000000000000206 /* CoreBluetoothMeshtasticTransport.swift in Sources */,
+				E10000000000000000000211 /* PhoneAPICodec.swift in Sources */,
+				E10000000000000000000212 /* SyncDiff.swift in Sources */,
+				E10000000000000000000207 /* SimulatedMeshtasticTransport.swift in Sources */,
+				E10000000000000000000208 /* ApplyDriver.swift in Sources */,
+				E10000000000000000000209 /* FleetLibrary.swift in Sources */,
+				E1000000000000000000020A /* DeviceRosterStore.swift in Sources */,
+				E1000000000000000000020B /* RootTabView.swift in Sources */,
+				E1000000000000000000020C /* ProfilesListView.swift in Sources */,
+				E1000000000000000000020D /* ProfileEditorView.swift in Sources */,
+				E1000000000000000000020E /* DevicesRosterView.swift in Sources */,
+				E1000000000000000000020F /* ApplySetupView.swift in Sources */,
+				E10000000000000000000210 /* SettingsView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		E10000000000000000000017 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				ENABLE_TESTABILITY = YES;
+			};
+			name = Debug;
+		};
+		E10000000000000000000018 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				COPY_PHASE_STRIP = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		E10000000000000000000019 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 7;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MeshConfig/Info.plist;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.3.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.meshconfig.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+
+			};
+			name = Debug;
+		};
+		E1000000000000000000001A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 7;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MeshConfig/Info.plist;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.3.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.meshconfig.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		E10000000000000000000016 /* Build configuration list for PBXProject "MeshConfig" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E10000000000000000000017 /* Debug */,
+				E10000000000000000000018 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E10000000000000000000015 /* Build configuration list for PBXNativeTarget "MeshConfig" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E10000000000000000000019 /* Debug */,
+				E1000000000000000000001A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = E10000000000000000000014 /* Project object */;
+}
