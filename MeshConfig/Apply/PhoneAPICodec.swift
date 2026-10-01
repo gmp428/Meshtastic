@@ -52,6 +52,7 @@ enum PhoneAPICodec {
         case position
         case display
         case lora
+        case network
     }
 
     struct ConfigSlice: Equatable {
@@ -65,6 +66,8 @@ enum PhoneAPICodec {
         var name: String?
         var nonDefaultPSK: Bool
         var preciseLocation: Bool
+        var uplinkEnabled: Bool
+        var downlinkEnabled: Bool
         /// Original Channel message. May contain the channel PSK. Do not log it.
         var raw: Data
     }
@@ -75,15 +78,17 @@ enum PhoneAPICodec {
         var channel: ParsedChannel?
         /// Raw `User` from `get_owner_response`. Kept so `set_owner` can preserve fields this app does not edit.
         var owner: Data?
+        /// Inner `MQTTConfig` from `get_module_config_response`. May contain the MQTT password. Do not log.
+        var mqtt: Data?
     }
 
     enum Inbound: Equatable {
         case myNode(UInt32)
         case config(ConfigSlice)
-        /// Config oneof this app reads but does not write (power, network, bluetooth, security). Body is not retained.
+        /// Config oneof this app reads but does not write (power, bluetooth, security). Body is not retained.
         case otherConfig(field: Int)
-        /// ModuleConfig oneof field number. Body is not retained (MQTT configs can hold passwords).
-        case moduleConfig(field: Int)
+        /// ModuleConfig oneof field number. `mqtt` is the inner MQTTConfig when the field is mqtt (1). It may contain a password. Do not log it. Other module bodies are dropped.
+        case moduleConfig(field: Int, mqtt: Data?)
         case channel(ParsedChannel)
         case configComplete(UInt32)
         case routing(requestID: UInt32, error: UInt64?)
@@ -163,6 +168,24 @@ enum PhoneAPICodec {
         return serialize(fields)
     }
 
+    static func getModuleConfigAdmin(kind: UInt64, passkey: Data?) -> Data {
+        var fields: [Field] = []
+        upsertVarint(&fields, 7, kind, force: true)
+        if let passkey, passkey.count == 8 {
+            upsertBytes(&fields, passkeyField, passkey)
+        }
+        return serialize(fields)
+    }
+
+    static func setModuleConfigAdmin(module: Data, passkey: Data) -> Data {
+        var fields: [Field] = []
+        upsertBytes(&fields, 35, module)
+        if passkey.count == 8 {
+            upsertBytes(&fields, passkeyField, passkey)
+        }
+        return serialize(fields)
+    }
+
     static func setConfigAdmin(config: Data, passkey: Data) -> Data {
         var fields: [Field] = []
         upsertBytes(&fields, 34, config)
@@ -195,9 +218,60 @@ enum PhoneAPICodec {
         upsertVarint(&fields, 1, settings.usePreset ? 1 : 0)
         upsertVarint(&fields, 2, modemPresetValue(settings.modemPreset))
         upsertVarint(&fields, 7, regionValue(settings.region))
+        upsertVarint(&fields, 8, UInt64(settings.hopLimit))
+        upsertVarint(&fields, 9, settings.txEnabled ? 1 : 0)
         upsertVarint(&fields, 11, UInt64(settings.frequencySlot))
         upsertVarint(&fields, 104, settings.ignoreMQTT ? 1 : 0)
+        upsertVarint(&fields, 105, settings.configOkToMQTT ? 1 : 0)
         return serialize(fields)
+    }
+
+    /// Gateway Wi-Fi. The PSK bytes are the password. Callers must not log `existing` or the result.
+    static func networkConfig(merging existing: Data, ssid: String, psk: Data) throws -> Data {
+        var fields = try parse(existing)
+        upsertVarint(&fields, 1, 1, force: true)
+        upsertBytes(&fields, 3, Data(ssid.utf8))
+        upsertBytes(&fields, 4, psk)
+        return serialize(fields)
+    }
+
+    /// MQTT module body. A nil server field is left as the radio had it (tracker disable).
+    /// `password` is secret. Callers must not log `existing` or the result.
+    static func mqttConfig(
+        merging existing: Data,
+        enabled: Bool,
+        address: String?,
+        username: String?,
+        password: Data?,
+        root: String?,
+        clearBridgeFlags: Bool
+    ) throws -> Data {
+        var fields = try parse(existing)
+        upsertVarint(&fields, 1, enabled ? 1 : 0, force: enabled)
+        if let address {
+            upsertBytes(&fields, 2, Data(address.utf8))
+        }
+        if let username {
+            upsertBytes(&fields, 3, Data(username.utf8))
+        }
+        if let password, !password.isEmpty {
+            upsertBytes(&fields, 4, password)
+        }
+        if clearBridgeFlags {
+            upsertVarint(&fields, 5, 0)
+            upsertVarint(&fields, 6, 0)
+            upsertVarint(&fields, 7, 0)
+            upsertVarint(&fields, 9, 0)
+            upsertVarint(&fields, 10, 0)
+        }
+        if let root {
+            upsertBytes(&fields, 8, Data(root.utf8))
+        }
+        return serialize(fields)
+    }
+
+    static func mqttModuleWrapper(_ body: Data) -> Data {
+        serialize([Field(number: 1, value: .bytes(body))])
     }
 
     static func deviceConfig(merging existing: Data, role: DeviceRole, settings: DeviceSettings) throws -> Data {
@@ -213,7 +287,7 @@ enum PhoneAPICodec {
     static func positionConfig(merging existing: Data, settings: PositionSettings) throws -> Data {
         var fields = try parse(existing)
         upsertVarint(&fields, 2, settings.smartPosition ? 1 : 0)
-        var flags = UInt32(truncatingIfNeeded: varint(fields, 7) ?? 0)
+        var flags = UInt32(truncatingIfNeeded: numeric(fields, 7))
         setBit(&flags, altitudeBit, settings.flags.altitude)
         setBit(&flags, altitudeMSLBit, settings.flags.altitudeMSL)
         setBit(&flags, geoidalBit, settings.flags.geoidalSeparation)
@@ -233,6 +307,7 @@ enum PhoneAPICodec {
         switch kind {
         case .device: number = 1
         case .position: number = 2
+        case .network: number = 4
         case .display: number = 5
         case .lora: number = 6
         }
@@ -356,8 +431,10 @@ enum PhoneAPICodec {
             }
         }
         if let moduleBytes = bytes(fields, 9) {
-            let field = (try parse(moduleBytes).first?.number) ?? 0
-            return .moduleConfig(field: field)
+            let moduleFields = try parse(moduleBytes)
+            let field = moduleFields.first?.number ?? 0
+            let mqtt = field == 1 ? (bytes(moduleFields, 1) ?? Data()) : nil
+            return .moduleConfig(field: field, mqtt: mqtt)
         }
         if let channelBytes = bytes(fields, 10) {
             return .channel(try parsedChannel(channelBytes))
@@ -384,7 +461,9 @@ enum PhoneAPICodec {
             device: inventory.device,
             position: inventory.position,
             channel: try parsedChannel(raw),
-            owner: inventory.owner
+            owner: inventory.owner,
+            network: inventory.network,
+            mqtt: inventory.mqtt
         )
     }
 
@@ -393,16 +472,20 @@ enum PhoneAPICodec {
         device: Data,
         position: Data,
         channel: ParsedChannel,
-        owner: Data
+        owner: Data,
+        network: Data = Data(),
+        mqtt: Data = Data()
     ) throws -> DeviceSnapshot {
         let loraFields = try parse(lora)
         let deviceFields = try parse(device)
         let positionFields = try parse(position)
-        let preset = modemPreset(varint(loraFields, 2) ?? 0)
-        let slot = UInt32(truncatingIfNeeded: varint(loraFields, 11) ?? 0)
-        let role = deviceRole(varint(deviceFields, 1) ?? 0)
-        let rebroadcast = rebroadcastMode(varint(deviceFields, 6) ?? 0)
-        let flagsValue = UInt32(truncatingIfNeeded: varint(positionFields, 7) ?? 0)
+        let preset = modemPreset(numeric(loraFields, 2))
+        let slot = UInt32(truncatingIfNeeded: numeric(loraFields, 11))
+        let role = deviceRole(numeric(deviceFields, 1))
+        let rebroadcast = rebroadcastMode(numeric(deviceFields, 6))
+        let flagsValue = UInt32(truncatingIfNeeded: numeric(positionFields, 7))
+        let mqttFields = try parse(mqtt)
+        let networkFields = try parse(network)
         let flags = PositionFlagSet(
             altitude: flagsValue & altitudeBit != 0,
             altitudeMSL: flagsValue & altitudeMSLBit != 0,
@@ -411,16 +494,34 @@ enum PhoneAPICodec {
         let isPrimary = channel.role == 1
         return DeviceSnapshot(
             modemPreset: preset,
-            ignoreMQTT: (varint(loraFields, 104) ?? 0) != 0,
+            ignoreMQTT: numeric(loraFields, 104) != 0,
+            configOkToMQTT: numeric(loraFields, 105) != 0,
+            hopLimit: UInt32(truncatingIfNeeded: numeric(loraFields, 8)),
+            txEnabled: numeric(loraFields, 9) != 0,
             frequencySlot: slot,
             primaryChannelName: isPrimary ? channel.name : nil,
             primaryHasNonDefaultPSK: isPrimary ? channel.nonDefaultPSK : false,
             preciseLocation: isPrimary ? channel.preciseLocation : false,
+            uplinkEnabled: isPrimary ? channel.uplinkEnabled : false,
+            downlinkEnabled: isPrimary ? channel.downlinkEnabled : false,
             role: role,
             rebroadcastMode: rebroadcast,
-            smartPosition: (varint(positionFields, 2) ?? 0) != 0,
+            smartPosition: numeric(positionFields, 2) != 0,
             positionFlags: flags,
-            longName: try longName(from: owner)
+            longName: try longName(from: owner),
+            wifiEnabled: numeric(networkFields, 1) != 0,
+            wifiSSID: textValue(networkFields, 3),
+            mqttEnabled: numeric(mqttFields, 1) != 0,
+            mqttAddress: textValue(mqttFields, 2),
+            mqttUsername: textValue(mqttFields, 3),
+            mqttRoot: textValue(mqttFields, 8),
+            mqttEncryptionEnabled: numeric(mqttFields, 5) != 0,
+            mqttJSONEnabled: numeric(mqttFields, 6) != 0,
+            mqttTLSEnabled: numeric(mqttFields, 7) != 0,
+            mqttProxyEnabled: numeric(mqttFields, 9) != 0,
+            mqttMapReportingEnabled: numeric(mqttFields, 10) != 0,
+            mqttBody: mqtt,
+            networkBody: network
         )
     }
 
@@ -469,18 +570,18 @@ enum PhoneAPICodec {
         let lora = LoRaSettings(
             usePreset: true,
             modemPreset: .shortTurbo,
-            ignoreMQTT: true,
+            ignoreMQTT: false,
             frequencySlot: 50,
             region: .us
         )
         guard try encodeMatches(
-            "0801100818fa012007280838014003480150165832c00601",
+            "0801100818fa012007280838014003480150165832c80601",
             loraConfig(merging: loraBase, settings: lora)
         ) else { return false }
         let loraBody = try loraConfig(merging: loraBase, settings: lora)
         let wrapped = setConfigAdmin(config: configWrapper(kind: .lora, body: loraBody), passkey: Data([UInt8(1), 2, 3, 4, 5, 6, 7, 8]))
         guard try encodeMatches(
-            "92021a32180801100818fa012007280838014003480150165832c00601aa06080102030405060708",
+            "92021a32180801100818fa012007280838014003480150165832c80601aa06080102030405060708",
             wrapped
         ) else { return false }
 
@@ -561,7 +662,7 @@ enum PhoneAPICodec {
         guard case .routing(let badID, let badError) = try classify(data(hex: "120d220b0805120218243504030201")),
               badID == 0x01020304, badError == 36 else { return false }
         guard case .otherConfig(3) = try classify(data(hex: "2a021a00")) else { return false }
-        guard case .moduleConfig(1) = try classify(data(hex: "4a020a00")) else { return false }
+        guard case .moduleConfig(let moduleField, _) = try classify(data(hex: "4a020a00")), moduleField == 1 else { return false }
         guard case .config(let slice) = try classify(data(hex: "2a0b3209080118fa0140034801")),
               slice.kind == .lora else { return false }
         let preserved = try loraConfig(merging: slice.body, settings: lora)
@@ -697,7 +798,7 @@ enum PhoneAPICodec {
 
     private static func parsedAdmin(_ data: Data) throws -> ParsedAdmin {
         let fields = try parse(data)
-        var message = ParsedAdmin(passkey: bytes(fields, passkeyField), config: nil, channel: nil, owner: nil)
+        var message = ParsedAdmin(passkey: bytes(fields, passkeyField), config: nil, channel: nil, owner: nil, mqtt: nil)
         if let configBytes = bytes(fields, 6) {
             message.config = try configSlice(configBytes)
         }
@@ -706,6 +807,10 @@ enum PhoneAPICodec {
         }
         if let ownerBytes = bytes(fields, 4), !ownerBytes.isEmpty {
             message.owner = ownerBytes
+        }
+        if let moduleBytes = bytes(fields, 8) {
+            let moduleFields = try parse(moduleBytes)
+            message.mqtt = bytes(moduleFields, 1) ?? Data()
         }
         return message
     }
@@ -740,6 +845,7 @@ enum PhoneAPICodec {
         let fields = try parse(data)
         if let body = bytes(fields, 1) { return ConfigSlice(kind: .device, body: body) }
         if let body = bytes(fields, 2) { return ConfigSlice(kind: .position, body: body) }
+        if let body = bytes(fields, 4) { return ConfigSlice(kind: .network, body: body) }
         if let body = bytes(fields, 5) { return ConfigSlice(kind: .display, body: body) }
         if let body = bytes(fields, 6) { return ConfigSlice(kind: .lora, body: body) }
         return nil
@@ -752,6 +858,8 @@ enum PhoneAPICodec {
         var name: String?
         var nonDefault = false
         var precise = false
+        var uplink = false
+        var downlink = false
         if let settings = bytes(fields, 2) {
             let settingFields = try parse(settings)
             if let rawName = bytes(settingFields, 3) {
@@ -764,6 +872,8 @@ enum PhoneAPICodec {
                 let moduleFields = try parse(module)
                 precise = (varint(moduleFields, 1) ?? 0) >= preciseLocationBits
             }
+            uplink = numeric(settingFields, 5) != 0
+            downlink = numeric(settingFields, 6) != 0
         }
         return ParsedChannel(
             index: index,
@@ -771,6 +881,8 @@ enum PhoneAPICodec {
             name: name,
             nonDefaultPSK: nonDefault,
             preciseLocation: precise,
+            uplinkEnabled: uplink,
+            downlinkEnabled: downlink,
             raw: data
         )
     }
@@ -809,6 +921,7 @@ enum PhoneAPICodec {
 
     private static func roleValue(_ role: DeviceRole) -> UInt64 {
         switch role {
+        case .client: return 0
         case .tak: return 7
         case .takTracker: return 10
         case .clientBase: return 12
@@ -817,6 +930,7 @@ enum PhoneAPICodec {
 
     private static func deviceRole(_ value: UInt64) -> DeviceRole? {
         switch value {
+        case 0: return .client
         case 7: return .tak
         case 10: return .takTracker
         case 12: return .clientBase

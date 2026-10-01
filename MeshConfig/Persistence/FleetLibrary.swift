@@ -52,6 +52,10 @@ final class FleetLibrary: ObservableObject {
         copy.updatedAt = Date()
         // One Keychain item per profile id. Do not reuse the source account.
         copy.channel.pskRef = .empty
+        copy.mqtt.passwordRef = .empty
+        copy.wifiNetworks = copy.wifiNetworks.map { network in
+            WifiNetwork(id: UUID(), ssid: network.ssid, pskRef: .empty)
+        }
         copy.applyTAKTemplateLocks()
         try? FleetPSKStore.ensurePSK(for: &copy)
         profiles.append(copy)
@@ -60,6 +64,7 @@ final class FleetLibrary: ObservableObject {
 
     func delete(_ profile: FleetProfile) {
         try? FleetPSKStore.deletePSK(for: profile.id)
+        try? GatewaySecretStore.deleteAll(for: profile)
         profiles.removeAll { $0.id == profile.id }
         if lastUsedProfileID == profile.id {
             UserDefaults.standard.removeObject(forKey: lastProfileKey)
@@ -109,6 +114,7 @@ final class FleetLibrary: ObservableObject {
             var decoded = try decoder.decode([FleetProfile].self, from: data)
             for index in decoded.indices {
                 decoded[index].channel.pskRef.exportableBase64 = nil
+                decoded[index].applyTAKTemplateLocks()
             }
             profiles = decoded
         } catch {

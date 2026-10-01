@@ -50,6 +50,8 @@ final class ApplySession: ObservableObject {
 
     let profile: FleetProfile
     let role: DeviceRole
+    let function: DeviceFunction
+    let wifiNetworkID: UUID?
     let config: ApplySessionConfig
 
     private let requestedLongName: String?
@@ -67,6 +69,8 @@ final class ApplySession: ObservableObject {
     init(
         profile: FleetProfile,
         role: DeviceRole,
+        function: DeviceFunction,
+        wifiNetworkID: UUID?,
         names: RadioNames,
         longEdited: Bool,
         shortEdited: Bool,
@@ -74,6 +78,8 @@ final class ApplySession: ObservableObject {
     ) {
         self.profile = profile
         self.role = role
+        self.function = function
+        self.wifiNetworkID = wifiNetworkID
         self.requestedLongName = names.longName
         self.requestedShortName = names.shortName
         self.longEdited = longEdited
@@ -214,13 +220,20 @@ final class ApplySession: ObservableObject {
         }
     }
 
-    func onVerified(snapshot: DeviceSnapshot) {
+    func onVerified(snapshot: DeviceSnapshot, wifiPSK: Data, mqttPassword: Data) {
         guard state == .verifying else { return }
+        let ssid = profile.wifiNetworks.first { $0.id == wifiNetworkID }?.ssid
+            ?? profile.wifiNetworks.first?.ssid
+            ?? ""
         let results = ProfileAcceptance.evaluate(
             profile: profile,
             snap: snapshot,
             appliedRole: role,
-            appliedLongName: writtenLongName
+            appliedLongName: writtenLongName,
+            function: function,
+            wifiSSID: ssid,
+            wifiPSK: wifiPSK,
+            mqttPassword: mqttPassword
         )
         lastChecklist = results
         if results.allSatisfy(\.ok) {

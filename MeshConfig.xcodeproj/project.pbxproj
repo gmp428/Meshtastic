@@ -11,6 +11,7 @@
 		E10000000000000000000201 /* FleetProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000101 /* FleetProfile.swift */; };
 		E10000000000000000000202 /* ConfiguredDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000102 /* ConfiguredDevice.swift */; };
 		E10000000000000000000203 /* FleetPSKStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000103 /* FleetPSKStore.swift */; };
+		E10000000000000000000213 /* GatewaySecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000113 /* GatewaySecretStore.swift */; };
 		E10000000000000000000204 /* ApplySession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000104 /* ApplySession.swift */; };
 		E10000000000000000000205 /* FleetRadioTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000105 /* FleetRadioTransport.swift */; };
 		E10000000000000000000206 /* CoreBluetoothMeshtasticTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000106 /* CoreBluetoothMeshtasticTransport.swift */; };
@@ -36,6 +37,7 @@
 		E10000000000000000000101 /* FleetProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetProfile.swift; sourceTree = "<group>"; };
 		E10000000000000000000102 /* ConfiguredDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfiguredDevice.swift; sourceTree = "<group>"; };
 		E10000000000000000000103 /* FleetPSKStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetPSKStore.swift; sourceTree = "<group>"; };
+		E10000000000000000000113 /* GatewaySecretStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatewaySecretStore.swift; sourceTree = "<group>"; };
 		E10000000000000000000104 /* ApplySession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplySession.swift; sourceTree = "<group>"; };
 		E10000000000000000000105 /* FleetRadioTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRadioTransport.swift; sourceTree = "<group>"; };
 		E10000000000000000000106 /* CoreBluetoothMeshtasticTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreBluetoothMeshtasticTransport.swift; sourceTree = "<group>"; };
@@ -116,6 +118,7 @@
 			isa = PBXGroup;
 			children = (
 				E10000000000000000000103 /* FleetPSKStore.swift */,
+				E10000000000000000000113 /* GatewaySecretStore.swift */,
 			);
 			path = Security;
 			sourceTree = "<group>";
@@ -239,6 +242,7 @@
 				E10000000000000000000201 /* FleetProfile.swift in Sources */,
 				E10000000000000000000202 /* ConfiguredDevice.swift in Sources */,
 				E10000000000000000000203 /* FleetPSKStore.swift in Sources */,
+				E10000000000000000000213 /* GatewaySecretStore.swift in Sources */,
 				E10000000000000000000204 /* ApplySession.swift in Sources */,
 				E10000000000000000000205 /* FleetRadioTransport.swift in Sources */,
 				E10000000000000000000206 /* CoreBluetoothMeshtasticTransport.swift in Sources */,
@@ -380,7 +384,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -391,7 +395,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.2.1;
+				MARKETING_VERSION = 1.3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.meshconfig.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -413,7 +417,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -424,7 +428,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.2.1;
+				MARKETING_VERSION = 1.3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.meshconfig.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

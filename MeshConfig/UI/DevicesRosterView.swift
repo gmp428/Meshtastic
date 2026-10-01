@@ -25,6 +25,11 @@ struct DevicesRosterView: View {
                                 StatusBadge(status: device.lastStatus)
                             }
                             HStack(spacing: 8) {
+                                Text(device.function.displayName)
+                                    .font(.caption.weight(.semibold))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(.quaternary, in: Capsule())
                                 RoleChip(role: device.role)
                                 Text(profileName(for: device.profileID))
                                     .font(.subheadline)
@@ -145,6 +150,26 @@ struct DeviceDetailView: View {
                             }
                         }
                     }
+                    Section("Function") {
+                        Picker("Function", selection: functionBinding) {
+                            ForEach(DeviceFunction.allCases, id: \.self) { item in
+                                Text(item.displayName).tag(item)
+                            }
+                        }
+                        .pickerStyle(.inline)
+                        Text(device.function.shortHelp)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        if device.function == .gateway, let profile = library.profile(id: device.profileID), profile.wifiNetworks.count > 1 {
+                            Picker("Wi-Fi network", selection: wifiBinding) {
+                                Text("Choose at apply").tag(Optional<UUID>.none)
+                                ForEach(profile.wifiNetworks) { network in
+                                    Text(network.ssid.isEmpty ? "Untitled network" : network.ssid).tag(Optional(network.id))
+                                }
+                            }
+                        }
+                    }
+                    if device.function == .tracker {
                     Section("Role") {
                         Picker("Role", selection: roleBinding) {
                             Text(DeviceRole.takTracker.displayName).tag(DeviceRole.takTracker)
@@ -154,6 +179,14 @@ struct DeviceDetailView: View {
                         Text("Changing role here does not write the radio. Status becomes Needs re-apply until you run Apply.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                    }
+                    } else {
+                        Section("Role") {
+                            LabeledContent("Role", value: DeviceRole.client.chipTitle)
+                            Text("A gateway is always CLIENT. Changing function does not write the radio until you run Apply.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     Section("Profile") {
                         Picker("Fleet profile", selection: profileSelection) {
@@ -209,6 +242,20 @@ struct DeviceDetailView: View {
         }
     }
 
+    private var functionBinding: Binding<DeviceFunction> {
+        Binding(
+            get: { device?.function ?? .tracker },
+            set: { roster.setFunction($0, wifiNetworkID: device?.wifiNetworkID, for: deviceID) }
+        )
+    }
+
+    private var wifiBinding: Binding<UUID?> {
+        Binding(
+            get: { device?.wifiNetworkID },
+            set: { roster.setFunction(device?.function ?? .gateway, wifiNetworkID: $0, for: deviceID) }
+        )
+    }
+
     private var roleBinding: Binding<DeviceRole> {
         Binding(
             get: { device?.role ?? .takTracker },
@@ -244,6 +291,8 @@ struct DeviceDetailView: View {
         navigation.applyPrefill = ApplyPrefill(
             profileID: device.profileID,
             role: device.role,
+            function: device.function,
+            wifiNetworkID: device.wifiNetworkID,
             longName: device.longName,
             shortName: device.shortName,
             peripheralID: device.peripheralID,

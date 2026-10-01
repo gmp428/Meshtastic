@@ -55,6 +55,8 @@ final class ApplyDriver: ObservableObject {
     func beginScan(
         profile: FleetProfile,
         role: DeviceRole,
+        function: DeviceFunction,
+        wifiNetworkID: UUID?,
         names: RadioNames,
         longEdited: Bool,
         shortEdited: Bool,
@@ -71,9 +73,21 @@ final class ApplyDriver: ObservableObject {
         try FleetPSKStore.ensurePSK(for: &prepared)
         library?.replace(prepared)
 
+        if function == .gateway {
+            let network = prepared.wifiNetworks.first { $0.id == wifiNetworkID } ?? prepared.wifiNetworks.first
+            guard let network, !network.ssid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, network.pskRef.isConfigured else {
+                throw MeshApplyPrepError.gatewayWiFi
+            }
+            guard prepared.mqtt.passwordRef.isConfigured,
+                  !prepared.mqtt.address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw MeshApplyPrepError.gatewayMQTT
+            }
+        }
         let nextSession = ApplySession(
             profile: prepared,
-            role: role,
+            role: function == .gateway ? .client : role,
+            function: function,
+            wifiNetworkID: wifiNetworkID ?? prepared.wifiNetworks.first?.id,
             names: names,
             longEdited: longEdited,
             shortEdited: shortEdited
@@ -149,6 +163,8 @@ final class ApplyDriver: ObservableObject {
                 radio: radio,
                 profile: current.profile,
                 role: current.role,
+                function: current.function,
+                wifiNetworkID: current.wifiNetworkID,
                 status: .failed,
                 names: nil
             )
@@ -226,8 +242,11 @@ final class ApplyDriver: ObservableObject {
                     return
                 } catch {
                     let waited = Int(session.config.reconnectTimeout.rounded())
+                    let gatewayNote = session.function == .gateway
+                        ? " Wi-Fi on a gateway disables Bluetooth, so the phone may not be able to read it back. Check that the gateway joined the saved network."
+                        : ""
                     session.reportFailure(
-                        message: "Reconnect after the settings save failed. Waited \(waited) seconds for Bluetooth to return. \(safeMessage(error))"
+                        message: "Reconnect after the settings save failed. Waited \(waited) seconds for Bluetooth to return.\(gatewayNote) \(safeMessage(error))"
                     )
                 }
             case .verifying:
@@ -238,7 +257,10 @@ final class ApplyDriver: ObservableObject {
                         continue
                     }
                     guard !Task.isCancelled else { return }
-                    session.onVerified(snapshot: snapshot)
+                    var secrets = try loadGatewaySecrets(session)
+                    session.onVerified(snapshot: snapshot, wifiPSK: secrets.wifi, mqttPassword: secrets.mqtt)
+                    zero(&secrets.wifi)
+                    zero(&secrets.mqtt)
                 } catch is CancellationError {
                     return
                 } catch {
@@ -322,6 +344,11 @@ final class ApplyDriver: ObservableObject {
                 psk[index] = 0
             }
         }
+        var secrets = try loadGatewaySecrets(session)
+        defer {
+            zero(&secrets.wifi)
+            zero(&secrets.mqtt)
+        }
         let plan = try SyncDiff.plan(
             inventory: inventory,
             profile: session.profile,
@@ -329,7 +356,11 @@ final class ApplyDriver: ObservableObject {
             names: session.nameRequest,
             longEdited: session.didEditLongName,
             shortEdited: session.didEditShortName,
-            psk: psk
+            psk: psk,
+            function: session.function,
+            wifiSSID: wifiSSID(for: session),
+            wifiPSK: secrets.wifi,
+            mqttPassword: secrets.mqtt
         )
         pendingWrites = plan.writes
         session.adoptPlan(plan)
@@ -347,9 +378,31 @@ final class ApplyDriver: ObservableObject {
             case .config(let kind, var data):
                 zero(&data)
                 return .config(kind, Data())
+            case .moduleMQTT(var data):
+                zero(&data)
+                return .moduleMQTT(Data())
             }
         }
         pendingWrites = []
+    }
+
+    private struct GatewaySecrets {
+        var wifi: Data
+        var mqtt: Data
+    }
+
+    private func loadGatewaySecrets(_ session: ApplySession) throws -> GatewaySecrets {
+        guard session.function == .gateway else { return GatewaySecrets(wifi: Data(), mqtt: Data()) }
+        let network = session.profile.wifiNetworks.first { $0.id == session.wifiNetworkID } ?? session.profile.wifiNetworks.first
+        let wifi = try GatewaySecretStore.load(account: network?.pskRef.keychainAccount ?? "") ?? Data()
+        let mqtt = try GatewaySecretStore.load(account: session.profile.mqtt.passwordRef.keychainAccount) ?? Data()
+        return GatewaySecrets(wifi: wifi, mqtt: mqtt)
+    }
+
+    private func wifiSSID(for session: ApplySession) -> String {
+        guard session.function == .gateway else { return "" }
+        let network = session.profile.wifiNetworks.first { $0.id == session.wifiNetworkID } ?? session.profile.wifiNetworks.first
+        return network?.ssid.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
     private func zero(_ data: inout Data) {
@@ -367,6 +420,8 @@ final class ApplyDriver: ObservableObject {
                 radio: radio,
                 profile: session.profile,
                 role: session.role,
+                function: session.function,
+                wifiNetworkID: session.wifiNetworkID,
                 status: outcome.passed ? .configured : .failed,
                 names: outcome.passed ? session.namesForRoster : nil
             )
@@ -420,6 +475,8 @@ final class ApplyDriver: ObservableObject {
         radio: DiscoveredRadio,
         profile: FleetProfile,
         role: DeviceRole,
+        function: DeviceFunction,
+        wifiNetworkID: UUID?,
         status: DeviceConfigStatus,
         names: RadioNames?
     ) {
@@ -436,6 +493,8 @@ final class ApplyDriver: ObservableObject {
             displayName: radio.name,
             profileID: profile.id,
             role: role,
+            function: function,
+            wifiNetworkID: wifiNetworkID,
             status: status,
             names: names,
             simulatedNote: radio.isSimulated
@@ -498,6 +557,8 @@ final class ApplyDriver: ObservableObject {
 enum MeshApplyPrepError: Error, LocalizedError {
     case disallowedChannelName
     case sessionBusy
+    case gatewayWiFi
+    case gatewayMQTT
 
     var errorDescription: String? {
         switch self {
@@ -505,6 +566,10 @@ enum MeshApplyPrepError: Error, LocalizedError {
             return "Choose a private channel name. LongFast and ShortFast cannot be the primary."
         case .sessionBusy:
             return "Finish or cancel the current radio before scanning for another."
+        case .gatewayWiFi:
+            return "Add a Wi-Fi network and save its password on the profile before applying a gateway."
+        case .gatewayMQTT:
+            return "Save the MQTT password on the profile before applying a gateway."
         }
     }
 }

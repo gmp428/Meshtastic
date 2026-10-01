@@ -110,9 +110,10 @@ final class SimulatedMeshtasticTransport: FleetRadioTransport {
             settings: LoRaSettings(
                 usePreset: true,
                 modemPreset: .longFast,
-                ignoreMQTT: false,
+                ignoreMQTT: true,
                 frequencySlot: 1,
-                region: .us
+                region: .us,
+                configOkToMQTT: false
             )
         )
         let device = try! PhoneAPICodec.deviceConfig(
@@ -137,10 +138,19 @@ final class SimulatedMeshtasticTransport: FleetRadioTransport {
         let channel = try! PhoneAPICodec.channelMessage(
             name: "LongFast",
             psk: Data(repeating: 0x11, count: 32),
-            uplink: true,
-            downlink: true,
+            uplink: false,
+            downlink: false,
             preciseLocation: false,
             channelID: 0x01020304
+        )
+        let mqtt = try! PhoneAPICodec.mqttConfig(
+            merging: Data(),
+            enabled: true,
+            address: nil,
+            username: nil,
+            password: nil,
+            root: nil,
+            clearBridgeFlags: false
         )
         return RadioInventory(
             lora: lora,
@@ -152,7 +162,8 @@ final class SimulatedMeshtasticTransport: FleetRadioTransport {
             shortName: "Sim",
             channels: [channel],
             observedConfigFields: [1, 2, 3, 4, 5, 6, 7, 8],
-            observedModuleFields: [1]
+            observedModuleFields: [1],
+            mqtt: mqtt
         )
     }
 

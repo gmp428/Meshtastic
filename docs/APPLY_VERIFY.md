@@ -4,17 +4,21 @@
 
 - **One active BLE connection.** Never connect a second radio until the current session reaches `disconnected` (success or failed-and-cleaned-up).
 - **Same `FleetProfile` + Keychain PSK** for every radio that should share the mesh.
-- **Role is chosen per device** at session start: `TAK` (phone + ATAK/iTAK) vs `TAK_TRACKER` (standalone).
+- **Function is chosen per device** at session start: Tracker (default) or Gateway.
+- **Role is chosen per tracker**: `TAK` (phone + ATAK/iTAK) vs `TAK_TRACKER` (standalone). A gateway is always `CLIENT`.
 - **Names are chosen per device** at session start. They are not a fleet-wide setting. **Long name** is the Meshtastic name ATAK shows as the callsign / PLI name (24 UTF-8 bytes). **Short name** is the 4-byte mesh badge. A blank field is left unchanged. Both blank sends no owner change. A non-blank field is written only when it differs from the radio.
 - PSK bytes leave Keychain only for the Channel write; never log them.
-- Heltec V3 / T114 / T1000-E: BLE config path is the same; do not assume Wi‑Fi on T114.
+- Heltec V3 / T114 / T1000-E: BLE config path is the same. T114 has no Wi‑Fi and stays a Tracker. A V3 gateway gets Wi‑Fi; that disables Bluetooth after reboot.
 
 ## Session inputs
 
 | Input | Source |
 | --- | --- |
 | Profile | Selected `FleetProfile` |
-| Role | Explicit picker (default = `profile.defaultRole`) |
+| Function | Tracker (default) or Gateway |
+| Role | Tracker only. Explicit picker (default = `profile.defaultRole`). Gateway is CLIENT |
+| Wi-Fi | Gateway only. One saved network, or a picker when the profile has several |
+| MQTT password | Keychain, profile-wide. Required before a gateway scan |
 | Long name | Optional text for this radio. TAK callsign. Blank keeps the radio’s current long name. Not stored on the profile. |
 | Short name | Optional. Blank keeps the radio’s current short name. It is not derived from the long name. |
 | Peripheral | User picks from scan (Meshtastic service UUID) |
@@ -40,7 +44,7 @@ idle
   → disconnected → idle (ready for next radio)
 ```
 
-Rewriting a section that already matches is what rebooted the radio once per section. Compare decoded fields first, not serialized bytes. A missing proto3 field and an explicit 0 are the same value. Nested channel bytes are compared by name, key, uplink, downlink, and precision. `commit_edit_settings` is the only reboot, and only when at least one write was queued. The Apply screen lists only the fields that differ, plus handshake, the key check, compare, reboot when needed, and verify. **Fields that differed** shows lines such as `device.role: TAK_TRACKER → TAK`.
+Rewriting a section that already matches is what rebooted the radio once per section. Compare decoded fields first, not serialized bytes. A missing proto3 field and an explicit 0 are the same value. Nested channel bytes are compared by name, key, uplink, downlink, and precision. `commit_edit_settings` is the only reboot, and only when at least one write was queued. The Apply screen lists only the fields that differ, plus handshake, the key check, compare, reboot when needed, and verify. **Fields that differed** shows lines such as `device.role: TAK_TRACKER → TAK`. Password rows are exactly `network.wifiPsk: •••• changed` and `mqtt.password: •••• changed`. The password bytes are not printed.
 
 ## Per-section writes (protobuf intent)
 
@@ -55,12 +59,16 @@ Rewriting a section that already matches is what rebooted the radio once per sec
 ### LoRa (`Config.LoRa`)
 - `use_preset = true`
 - `modem_preset = SHORT_TURBO`
-- `ignore_mqtt = true`
+- `hop_limit = 3`
+- `tx_enabled = true`
+- `ignore_mqtt = false`
+- `config_ok_to_mqtt = true` (required, or a gateway drops the packet)
 - `channel_num` / frequency slot = profile (`50` for TAK ShortTurbo)
 - region = profile region (US default)
 
 ### Device (`Config.Device`)
-- `role` = session role (`TAK` or `TAK_TRACKER`)
+- Tracker: `role` = session role (`TAK` or `TAK_TRACKER`)
+- Gateway: `role` = `CLIENT` (protobuf 0, written with force so the zero is not omitted)
 - `rebroadcast_mode = LOCAL_ONLY`
 - optional `tzdef` for standalones
 
@@ -77,7 +85,18 @@ Rewriting a section that already matches is what rebooted the radio once per sec
 2. Merge name, AES-256 PSK (32 bytes from Keychain), precise location, and uplink/downlink.
 3. `set_channel` only when the channel name, key, uplink, downlink, precision, or primary role differs. The write is inside the same edit transaction. Field order inside the channel settings does not count.
 
-Sections the profile does not own (power, network, Bluetooth, security, module config) are read in the `want_config` drain and not written.
+### Network (`Config.Network`) — Gateway only
+- `wifi_enabled = true`
+- `wifi_ssid` = the saved network chosen for this gateway
+- `wifi_psk` = Keychain bytes for that network. Never logged. An empty password is not written (that would clear the radio).
+- Trackers do not receive a network write.
+
+### MQTT module (`ModuleConfig.mqtt` via `set_module_config`)
+- Tracker: `enabled = false`. Address, username, password, and root on the radio are left alone.
+- Gateway: `enabled = true`, `address` / `username` / `root` from the profile (defaults `mcsctak.duckdns.org:8883`, `meshgw`, `opentakserver`), password from the Keychain, `encryption_enabled = false`, `json_enabled = false`, `tls_enabled = false`, `proxy_to_client_enabled = false`, `map_reporting_enabled = false`. Map-report settings are not owned and are preserved.
+- The MQTT write, when needed, is inside the same begin/commit as the other differing sections.
+
+Sections the profile does not own (power, Bluetooth, security, module configs other than MQTT) are read in the `want_config` drain and not written. Network is written only for a Gateway.
 
 ## Reboot / reconnect
 
@@ -99,26 +118,34 @@ Sections the profile does not own (power, network, Bluetooth, security, module c
 After channel Send, read back and require **all** TAK checks green:
 
 1. LoRa ShortTurbo  
-2. Ignore MQTT on  
-3. Frequency slot matches profile  
-4. Primary name private (not LongFast/ShortFast) and matches profile  
-5. Primary PSK non-default (length/entropy check or “not default key” flag — **do not compare by logging bytes**)  
-6. Precise location on  
-7. Role matches session choice  
-8. Long name matches the callsign when this sync changed it. When the long name was left alone, the row passes with the radio’s existing name.  
-9. Rebroadcast LOCAL_ONLY  
-10. Smart Position matches profile  
-11. Position flags: ALTITUDE on, ALTITUDE_MSL off  
-12. GEOIDAL_SEPARATION matches profile  
+2. Ignore MQTT off  
+3. Ok to MQTT on  
+4. Hop limit is 3  
+5. Transmit is on  
+6. Frequency slot matches profile  
+7. Primary name private (not LongFast/ShortFast) and matches profile  
+8. Primary PSK non-default (length/entropy check or “not default key” flag — **do not compare by logging bytes**)  
+9. Precise location on  
+10. Primary channel uplink on and downlink on  
+11. Role matches session choice (CLIENT for a gateway)  
+12. Long name matches the callsign when this sync changed it. When the long name was left alone, the row passes with the radio’s existing name.  
+13. Rebroadcast LOCAL_ONLY  
+14. Smart Position matches profile  
+15. Position flags: ALTITUDE on, ALTITUDE_MSL off  
+16. GEOIDAL_SEPARATION matches profile  
+17. Tracker: MQTT module is off  
+18. Gateway: Wi-Fi on and SSID matches; Wi-Fi password matches the Keychain (the row label does not include the bytes); MQTT on; address, username, and root match; MQTT password matches the Keychain; encryption, JSON, TLS, proxy, and map reporting are off  
+
+A gateway that enabled Wi-Fi may not return on Bluetooth. Reconnect failure text says so. Confirm the node on the saved network and that OpenTAKServer received packets. Do not treat a missing BLE read-back as proof the save failed, and do not treat it as proof the save succeeded.
 
 Any fail → `failed` with checklist; stay connected only long enough to show diffs, then disconnect.
 
 ## Fleet loop UX (contract)
 
-1. User selects profile → picks role for **this** device. Long and short name are optional. A roster row or Re-apply fills the last synced names without marking them edited. Scan.  
+1. User selects profile → picks function for **this** device. A tracker also picks a role. A gateway picks a Wi-Fi network when more than one is saved. Long and short name are optional. A roster row or Re-apply fills the last synced names without marking them edited. Scan.  
 2. Connect → read the full config → show what will change → write the diff or skip → verify → show pass/fail.  
 3. Disconnect. On success, store the long name and short name that are on the radio (the value just written, or the value that was already there).  
-4. Prompt: **Next device** (same profile + ask role and name again) or **Done**.  
+4. Prompt: **Next device** (same profile + ask function, role, and name again) or **Done**.  
 5. Never auto-scan-connect the next radio without an explicit tap (avoids wrong-board flash of config).
 
 ## Out of scope for this flow
@@ -154,7 +181,7 @@ Characteristics (Meshtastic Client API):
 
 Wrap `AdminMessage` in `MeshPacket` → `DataMessage` with `PortNum.ADMIN_APP`, include `session_passkey`, `want_response`. Write to ToRadio.
 
-All mutating writes in one sync share one `begin_edit_settings` / `commit_edit_settings` pair so the radio reboots at most once. Channel is one of those writes when it differs. It is not a separate reboot.
+All mutating writes in one sync share one `begin_edit_settings` / `commit_edit_settings` pair so the radio reboots at most once. Channel, network, and the MQTT module are writes in that same pair when they differ. They are not a separate reboot.
 
 ### PSK on the wire
 

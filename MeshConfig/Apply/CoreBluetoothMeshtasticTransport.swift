@@ -48,6 +48,9 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
     private var deviceConfig: Data?
     private var positionConfig: Data?
     private var displayConfig: Data?
+    private var networkConfig: Data?
+    /// MQTT module body from the handshake. May contain the MQTT password. Scrubbed with the session.
+    private var mqttConfig: Data?
     /// Last `User` body from get_owner. Merged into set_owner so id, keys, and license flags stay put.
     private var ownerUser: Data?
     private var capturedChannels: [Data] = []
@@ -158,8 +161,11 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
                 sawMyNode = true
             case .otherConfig(let field):
                 observedConfigFields.insert(field)
-            case .moduleConfig(let field):
+            case .moduleConfig(let field, let mqtt):
                 observedModuleFields.insert(field)
+                if field == 1, let mqtt {
+                    mqttConfig = mqtt
+                }
             case .channel(let channel):
                 capturedChannels.append(channel.raw)
             case .configComplete(let id) where id == nonce && sawMyNode:
@@ -213,7 +219,9 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
             shortName: try PhoneAPICodec.shortName(from: user),
             channels: capturedChannels,
             observedConfigFields: observedConfigFields,
-            observedModuleFields: observedModuleFields
+            observedModuleFields: observedModuleFields,
+            network: networkConfig ?? Data(),
+            mqtt: mqttConfig ?? Data()
         )
     }
 
@@ -276,12 +284,16 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         let position = try await fetchConfig(.position)
         let channel = try await fetchChannel()
         let owner = try await fetchOwner()
+        let network = try await fetchConfig(.network)
+        let mqtt = try await fetchMQTT()
         return try PhoneAPICodec.snapshot(
             lora: lora,
             device: device,
             position: position,
             channel: channel,
-            owner: owner
+            owner: owner,
+            network: network,
+            mqtt: mqtt
         )
     }
 
@@ -342,6 +354,11 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
             )
         case .channel(let channel):
             admin = PhoneAPICodec.setChannelAdmin(channel: channel, passkey: sessionPasskey)
+        case .moduleMQTT(let body):
+            admin = PhoneAPICodec.setModuleConfigAdmin(
+                module: PhoneAPICodec.mqttModuleWrapper(body),
+                passkey: sessionPasskey
+            )
         }
         do {
             _ = try await roundTrip(
@@ -373,6 +390,9 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         case .lora:
             type = 5
             label = "LoRa"
+        case .network:
+            type = 3
+            label = "network"
         }
         let admin = PhoneAPICodec.getConfigAdmin(kind: type, passkey: sessionPasskey)
         guard let message = try await roundTrip(
@@ -472,7 +492,7 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
                 if let key = message.passkey, key.count == 8 {
                     adoptPasskey(key)
                 }
-                if wantBody && message.config == nil && message.channel == nil && message.owner == nil && message.passkey == nil {
+                if wantBody && message.config == nil && message.channel == nil && message.owner == nil && message.mqtt == nil && message.passkey == nil {
                     continue
                 }
                 return message
@@ -498,7 +518,24 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         case .display:
             displayConfig = slice.body
             observedConfigFields.insert(5)
+        case .network:
+            networkConfig = slice.body
+            observedConfigFields.insert(4)
         }
+    }
+
+    private func fetchMQTT() async throws -> Data {
+        let admin = PhoneAPICodec.getModuleConfigAdmin(kind: 0, passkey: sessionPasskey)
+        guard let message = try await roundTrip(
+            admin: admin,
+            wantResponse: true,
+            wantBody: true,
+            linkDropSucceeds: false
+        ),
+              let mqtt = message.mqtt else {
+            throw MeshtasticBLEError.adminFailed("The radio did not return MQTT module config.")
+        }
+        return mqtt
     }
 
     private func nextPacketID() -> UInt32 {
@@ -531,6 +568,18 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         deviceConfig = nil
         positionConfig = nil
         displayConfig = nil
+        if networkConfig != nil {
+            for index in networkConfig!.indices {
+                networkConfig![index] = 0
+            }
+            networkConfig = nil
+        }
+        if mqttConfig != nil {
+            for index in mqttConfig!.indices {
+                mqttConfig![index] = 0
+            }
+            mqttConfig = nil
+        }
         observedConfigFields = []
         observedModuleFields = []
         for channelIndex in capturedChannels.indices {
@@ -547,6 +596,12 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
                 for byteIndex in inventory!.channels[channelIndex].indices {
                     inventory!.channels[channelIndex][byteIndex] = 0
                 }
+            }
+            for index in inventory!.network.indices {
+                inventory!.network[index] = 0
+            }
+            for index in inventory!.mqtt.indices {
+                inventory!.mqtt[index] = 0
             }
             inventory = nil
         }

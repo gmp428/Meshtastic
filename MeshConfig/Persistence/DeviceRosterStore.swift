@@ -26,6 +26,8 @@ final class DeviceRosterStore: ObservableObject {
         displayName: String,
         profileID: UUID,
         role: DeviceRole,
+        function: DeviceFunction,
+        wifiNetworkID: UUID?,
         status: DeviceConfigStatus,
         names: RadioNames?,
         simulatedNote: Bool
@@ -40,6 +42,8 @@ final class DeviceRosterStore: ObservableObject {
             devices[matchIndex].peripheralID = peripheralID ?? devices[matchIndex].peripheralID
             devices[matchIndex].profileID = profileID
             devices[matchIndex].role = role
+            devices[matchIndex].function = function
+            devices[matchIndex].wifiNetworkID = wifiNetworkID ?? devices[matchIndex].wifiNetworkID
             if status == .configured, let names {
                 if let longName = names.longName, !longName.isEmpty {
                     devices[matchIndex].longName = longName
@@ -70,6 +74,8 @@ final class DeviceRosterStore: ObservableObject {
                 displayName: appliedNames?.longName ?? displayName,
                 profileID: profileID,
                 role: role,
+                function: function,
+                wifiNetworkID: wifiNetworkID,
                 longName: appliedNames?.longName,
                 shortName: appliedNames?.shortName,
                 notes: notes
@@ -84,6 +90,20 @@ final class DeviceRosterStore: ObservableObject {
             }
             devices.append(created)
         }
+        persist()
+    }
+
+    /// Function edits stay on the phone until Apply writes them.
+    func setFunction(_ function: DeviceFunction, wifiNetworkID: UUID?, for id: UUID) {
+        guard let index = devices.firstIndex(where: { $0.id == id }) else { return }
+        devices[index].function = function
+        devices[index].wifiNetworkID = wifiNetworkID
+        if function == .gateway {
+            devices[index].role = .client
+        } else if devices[index].role == .client {
+            devices[index].role = .takTracker
+        }
+        devices[index].lastStatus = .roleChangedNeedsReapply
         persist()
     }
 

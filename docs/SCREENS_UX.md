@@ -41,13 +41,34 @@ Sections matching the model: LoRa, Channel, Device defaults, Position, Display, 
 | PSK | Status only: “Key in Keychain” / “Will generate on save”. Buttons: **Generate if missing**, **Rotate** (confirm: “All radios need re-apply”) |
 | LoRa preset | Locked ShortTurbo on TAK template (advanced unlock later) |
 | Slot | Stepper/number, default 50 |
-| Ignore MQTT | Toggle on |
+| Ignore MQTT | Locked Off |
+| Ok to MQTT | Locked On |
+| Hop limit | Locked 3 |
+| Transmit | Locked On |
 | Default role | Segmented: TAK Tracker \| TAK |
 | Rebroadcast | LOCAL_ONLY (fixed for TAK template) |
 | Smart Position | Toggle |
 | Altitude | Show “HAE (ALTITUDE)” read-only correct; no MSL toggle on TAK template |
 | Units | Imperial / Metric |
 | Save | Persists Codable profile; `ensurePSK` if needed |
+
+**Server / MQTT** (profile-wide, used by the gateway; trackers only force the module off):
+
+| Field | UI |
+| --- | --- |
+| Address | Text, default `mcsctak.duckdns.org:8883` |
+| Username | Text, default `meshgw` |
+| Root topic | Text, default `opentakserver` |
+| Password | Secure field, saved once to the Keychain. After that, “Saved in Keychain” and Replace. Never shown again. |
+| Encryption, JSON, TLS, proxy, map reporting | Locked Off |
+
+**Wi-Fi for gateways** (not applied to trackers). Several networks can be saved. Apply uses the only network, or the one chosen for that gateway.
+
+| Field | UI |
+| --- | --- |
+| SSID | Text, stored on the profile |
+| Password | Secure field, Keychain account `wifi-psk.<networkUUID>`. Saved once. |
+| Add / Remove | Add another network, or remove one and delete its Keychain item |
 
 ---
 
@@ -56,15 +77,16 @@ Sections matching the model: LoRa, Channel, Device defaults, Position, Display, 
 ### 3a. Setup sheet (before scan)
 
 1. **Profile** picker (default last-used)
-2. **Role for this device** — required segmented control:
+2. **Function for this device** — Tracker (default) or Gateway. A gateway shows the only Wi-Fi network, or a picker when the profile has several, and a note that role is CLIENT and that Wi-Fi disables Bluetooth.
+3. **Role for this device** — shown for a tracker only. Required segmented control:
    - **TAK Tracker** — standalone
    - **TAK** — this phone will run ATAK/iTAK + Local TAK Server
-3. Short help under role (from `DeviceRole.shortHelp`)
-4. **Name on TAK** — optional **long name** (the Meshtastic name ATAK shows as this radio’s callsign) and optional **short name** (the 4-byte mesh badge). Blank means leave that field alone. Both blank sends no name change. A roster row, Re-apply, or a scan hit that matches a roster peripheral fills the last synced names. Those fills are not edits. After connect, names read from the radio replace an unedited prefill.
-5. Primary: **Scan for radios**
-6. Footer shows the same bundle version as Settings (`Version <short> (<build>)`)
+4. Short help under role (from `DeviceRole.shortHelp`)
+5. **Name on TAK** — optional **long name** (the Meshtastic name ATAK shows as this radio’s callsign) and optional **short name** (the 4-byte mesh badge). Blank means leave that field alone. Both blank sends no name change. A roster row, Re-apply, or a scan hit that matches a roster peripheral fills the last synced names. Those fills are not edits. After connect, names read from the radio replace an unedited prefill.
+6. Primary: **Scan for radios**
+7. Footer shows the same bundle version as Settings (`Version <short> (<build>)`)
 
-Gate: cannot scan until a profile and a role are set, and any typed name fits the byte limit. Blank names are allowed.
+Gate: a tracker cannot scan until a profile and a role are set. A gateway cannot scan until a Wi-Fi network has an SSID and a saved password, and the MQTT password is in the Keychain. Any typed name must fit the byte limit. Blank names are allowed.
 
 ### 3b. Scan
 
@@ -86,7 +108,7 @@ Steps are only the work this sync will do (checkmarks / spinner / fail):
 5. Reboot, only when at least one field differs  
 6. Verify  
 
-Under the steps, **Fields that differed** lists ids such as `device.role: TAK_TRACKER → TAK`. That list is safe to read on device: it has no PSK, passkey, or public key. The result screen keeps the same list.
+Under the steps, **Fields that differed** lists ids such as `device.role: TAK_TRACKER → TAK`. Password rows say `•••• changed` and never the password. That list is safe to read on device: it has no PSK, Wi-Fi password, MQTT password, passkey, or public key. The result screen keeps the same list.
 
 Footer: Cancel → disconnect, mark failed “cancelled”, return to setup.
 
@@ -94,7 +116,7 @@ Footer: Cancel → disconnect, mark failed “cancelled”, return to setup.
 
 - Green check, device id, profile, role
 - Checklist all green (collapsed OK)
-- Primary: **Next device** → back to Setup with **same profile**, role **and names cleared** (must pick again)
+- Primary: **Next device** → back to Setup with **same profile**, function back to Tracker, role **and names cleared** (must pick again)
 - Secondary: **Done** → Profiles or Apply idle
 
 ### 3e. Result — Failed
@@ -110,7 +132,8 @@ Footer: Cancel → disconnect, mark failed “cancelled”, return to setup.
 
 | Rule | Why |
 | --- | --- |
-| Role asked every device | Stops TAK vs TAK_TRACKER mix-ups |
+| Function asked every device | Tracker vs gateway is a different radio job |
+| Role asked every tracker | Stops TAK vs TAK_TRACKER mix-ups |
 | Long name is per device, and optional | TAK callsign is per radio. Blank leaves the radio’s name alone. |
 | Next device never auto-connects | Wrong board risk |
 | One session at a time | BLE constraint |
@@ -144,7 +167,7 @@ Footer: Cancel → disconnect, mark failed “cancelled”, return to setup.
 | --- | --- |
 | `ProfilesListView` | `[FleetProfile]` store |
 | `ProfileEditorView` | `FleetProfile` + `FleetPSKStore` |
-| `ApplySetupView` | profile id + `DeviceRole?` + optional long name + optional short name |
+| `ApplySetupView` | profile id + function + `DeviceRole?` + optional Wi-Fi id + optional long name + optional short name |
 | `ScanView` | CB scan |
 | `ApplyProgressView` | `ApplySession` |
 | `ApplyResultView` | checklist / failure |
@@ -165,14 +188,15 @@ On **successful verify**, upsert a `ConfiguredDevice`:
 A failed attempt does not replace a long name that already verified.
 
 ### Devices list
-| Row | Long name (TAK callsign), short-name badge, role chip (TAK / TAK Tracker), profile name, last applied, status badge |
+| Row | Long name (TAK callsign), short-name badge, function chip (Tracker / Gateway), role chip, profile name, last applied, status badge |
 | --- | --- |
 | Status | Configured · Needs re-apply (role changed) · Failed · Pending |
 | Tap | Device detail |
 | Swipe | Remove from roster (does not factory-reset the radio) |
 
 ### Device detail
-- Role picker (TAK Tracker / TAK) — changing sets `roleChangedNeedsReapply`
+- Function picker (Tracker / Gateway). Gateway forces role CLIENT and can pick a saved Wi-Fi network when the profile has more than one. Changing function sets Needs re-apply and does not write Bluetooth.
+- Role picker (TAK Tracker / TAK) for a tracker — changing sets `roleChangedNeedsReapply`
 - Profile (read-only link, or switch profile with confirm)
 - **Re-apply now** → Apply flow prefilled with this device’s profile, role, and last applied names; prefer reconnect by peripheralID. The names can still be edited before scan.
 - Notes field

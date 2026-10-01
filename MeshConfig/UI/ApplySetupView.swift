@@ -14,6 +14,8 @@ struct ApplySetupView: View {
     @EnvironmentObject private var navigation: AppNavigation
 
     @State private var selectedProfileID: UUID?
+    @State private var function: DeviceFunction = .tracker
+    @State private var wifiNetworkID: UUID?
     @State private var role: DeviceRole?
     @State private var longNameText = ""
     @State private var shortNameText = ""
@@ -53,6 +55,37 @@ struct ApplySetupView: View {
                         }
                     }
                 }
+                Section("Function for this device") {
+                    Picker("Function", selection: $function) {
+                        ForEach(DeviceFunction.allCases, id: \.self) { item in
+                            Text(item.displayName).tag(item)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    Text(function.shortHelp)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    if function == .gateway {
+                        if let profile = selectedProfile, profile.wifiNetworks.count > 1 {
+                            Picker("Wi-Fi network", selection: $wifiNetworkID) {
+                                Text("Choose…").tag(Optional<UUID>.none)
+                                ForEach(profile.wifiNetworks) { network in
+                                    Text(network.ssid.isEmpty ? "Untitled network" : network.ssid).tag(Optional(network.id))
+                                }
+                            }
+                        } else if let network = selectedProfile?.wifiNetworks.first {
+                            LabeledContent("Wi-Fi", value: network.ssid.isEmpty ? "Add an SSID on the profile" : network.ssid)
+                        } else {
+                            Text("Add a Wi-Fi network in the profile before scanning a gateway.")
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                        }
+                        Text("Gateway uses device role CLIENT. Wi-Fi is turned on, which disables Bluetooth after the radio reboots.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if function == .tracker {
                 Section("Role for this device") {
                     Picker("Role", selection: $role) {
                         Text("Choose…").tag(Optional<DeviceRole>.none)
@@ -69,6 +102,7 @@ struct ApplySetupView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
+                }
                 }
                 Section {
                     TextField("Long name", text: $longNameText)
@@ -96,7 +130,9 @@ struct ApplySetupView: View {
                         ForEach(roster.devices) { device in
                             Button {
                                 selectedProfileID = device.profileID
-                                role = device.role
+                                function = device.function
+                                wifiNetworkID = device.wifiNetworkID
+                                role = device.function == .gateway ? .client : device.role
                                 fillNames(long: device.longName ?? "", short: device.shortName ?? "")
                                 preferredPeripheralID = device.peripheralID
                                 rosterDeviceID = device.id
@@ -200,7 +236,9 @@ struct ApplySetupView: View {
             .onChange(of: navigation.applyPrefill) { _, prefill in
                 guard let prefill, driver.isReadyForNextRadio else { return }
                 selectedProfileID = prefill.profileID
-                role = prefill.role
+                function = prefill.function
+                wifiNetworkID = prefill.wifiNetworkID
+                role = prefill.function == .gateway ? .client : prefill.role
                 fillNames(long: prefill.longName ?? "", short: prefill.shortName ?? "")
                 preferredPeripheralID = prefill.peripheralID
                 rosterDeviceID = prefill.rosterDeviceID
@@ -233,10 +271,13 @@ struct ApplySetupView: View {
     private var canScan: Bool {
         // `generation` publishes session transitions so this gate refreshes.
         _ = driver.generation
-        guard driver.isReadyForNextRadio, let profile = selectedProfile, role != nil, resolvedNames != nil else {
+        guard driver.isReadyForNextRadio, let profile = selectedProfile, resolvedNames != nil else {
             return false
         }
-        return !profile.channel.isDisallowedPrimaryName
+        if profile.channel.isDisallowedPrimaryName { return false }
+        if function == .tracker { return role != nil }
+        let network = profile.wifiNetworks.first { $0.id == wifiNetworkID } ?? (profile.wifiNetworks.count == 1 ? profile.wifiNetworks.first : nil)
+        return network?.ssid.isEmpty == false && network?.pskRef.isConfigured == true && profile.mqtt.passwordRef.isConfigured
     }
 
     private func namePreview(_ names: RadioNames) -> String {
@@ -296,12 +337,22 @@ struct ApplySetupView: View {
     }
 
     private func startScan() async {
-        guard let profile = selectedProfile, let role else { return }
+        guard let profile = selectedProfile else { return }
+        let appliedRole: DeviceRole
+        if function == .gateway {
+            appliedRole = .client
+        } else if let role {
+            appliedRole = role
+        } else {
+            return
+        }
         do {
             let names = try RadioNames.resolve(longName: longNameText, shortName: shortNameText)
             try await driver.beginScan(
                 profile: profile,
-                role: role,
+                role: appliedRole,
+                function: function,
+                wifiNetworkID: wifiNetworkID,
                 names: names,
                 longEdited: longEdited,
                 shortEdited: shortEdited,
@@ -323,6 +374,8 @@ struct ApplySetupView: View {
 
     private func clearRoleAndReturn() {
         role = nil
+        function = .tracker
+        wifiNetworkID = nil
         fillNames(long: "", short: "")
         preferredPeripheralID = nil
         rosterDeviceID = nil

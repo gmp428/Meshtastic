@@ -28,6 +28,8 @@ enum SyncWrite: Equatable, Sendable {
     case config(PhoneAPICodec.ConfigKind, Data)
     /// Merged primary `Channel` message. Contains the PSK. Do not log.
     case channel(Data)
+    /// Inner `MQTTConfig` body. Contains the MQTT password when this is a gateway write. Do not log.
+    case moduleMQTT(Data)
 }
 
 struct SyncPlan: Equatable, Sendable {
@@ -63,8 +65,12 @@ struct RadioInventory: Equatable, Sendable {
     var channels: [Data]
     /// Config oneof field numbers seen during the drain, including sections this app does not write.
     var observedConfigFields: Set<Int>
-    /// ModuleConfig oneof field numbers seen during the drain. Bodies are not kept.
+    /// ModuleConfig oneof field numbers seen during the drain. Bodies other than MQTT are not kept.
     var observedModuleFields: Set<Int>
+    /// `Config.Network` body. May contain the Wi-Fi password. Do not log.
+    var network: Data = Data()
+    /// Inner `MQTTConfig` body. May contain the MQTT password. Do not log.
+    var mqtt: Data = Data()
 
     func applying(_ writes: [SyncWrite]) throws -> RadioInventory {
         var copy = self
@@ -80,7 +86,10 @@ struct RadioInventory: Equatable, Sendable {
                 case .device: copy.device = body
                 case .position: copy.position = body
                 case .display: copy.display = body
+                case .network: copy.network = body
                 }
+            case .moduleMQTT(let body):
+                copy.mqtt = body
             case .channel(let raw):
                 if let index = copy.channels.firstIndex(where: { channel in
                     (try? PhoneAPICodec.primaryChannel(in: [channel])) != nil
@@ -98,6 +107,7 @@ struct RadioInventory: Equatable, Sendable {
 enum SyncError: Error, Equatable {
     case invalidPSK
     case channelName
+    case gatewaySecret
 }
 
 extension SyncError: LocalizedError {
@@ -107,6 +117,8 @@ extension SyncError: LocalizedError {
             return "The fleet PSK must be 32 bytes before a channel write."
         case .channelName:
             return "The channel name must be shorter than 12 bytes."
+        case .gatewaySecret:
+            return "Save the gateway Wi-Fi password and the MQTT password in the Keychain before applying a gateway."
         }
     }
 }
@@ -121,7 +133,11 @@ enum SyncDiff {
         names: RadioNames,
         longEdited: Bool,
         shortEdited: Bool,
-        psk: Data
+        psk: Data,
+        function: DeviceFunction,
+        wifiSSID: String,
+        wifiPSK: Data,
+        mqttPassword: Data
     ) throws -> SyncPlan {
         guard psk.count == 32 else { throw SyncError.invalidPSK }
         var changes: [SyncChange] = []
@@ -183,7 +199,17 @@ enum SyncDiff {
             desired: UInt64(profile.lora.frequencySlot),
             label: { String($0) }
         )
+        noteExact(
+            &loraChanges,
+            id: "lora.hop",
+            title: "Hop limit",
+            radio: PhoneAPICodec.numeric(loraFields, 8),
+            desired: UInt64(profile.lora.hopLimit),
+            label: { String($0) }
+        )
+        noteBool(&loraChanges, id: "lora.tx", title: "Transmit", field: 9, fields: loraFields, desired: profile.lora.txEnabled)
         noteBool(&loraChanges, id: "lora.ignoreMQTT", title: "Ignore MQTT", field: 104, fields: loraFields, desired: profile.lora.ignoreMQTT)
+        noteBool(&loraChanges, id: "lora.config_ok_to_mqtt", title: "Ok to MQTT", field: 105, fields: loraFields, desired: profile.lora.configOkToMQTT)
         if !loraChanges.isEmpty {
             changes.append(contentsOf: loraChanges)
             writes.append(.config(.lora, try PhoneAPICodec.loraConfig(merging: inventory.lora, settings: profile.lora)))
@@ -318,6 +344,61 @@ enum SyncDiff {
             }
         }
 
+        let mqttFields = try PhoneAPICodec.parse(inventory.mqtt)
+        if function == .gateway {
+            guard !wifiSSID.isEmpty, !wifiPSK.isEmpty, !mqttPassword.isEmpty else { throw SyncError.gatewaySecret }
+            let networkFields = try PhoneAPICodec.parse(inventory.network)
+            var networkChanges: [SyncChange] = []
+            noteBool(&networkChanges, id: "network.wifiEnabled", title: "Wi-Fi", field: 1, fields: networkFields, desired: true)
+            let radioSSID = PhoneAPICodec.textValue(networkFields, 3)
+            if radioSSID != wifiSSID {
+                networkChanges.append(SyncChange(id: "network.wifiSSID", title: "Wi-Fi SSID", detail: "\(radioSSID) → \(wifiSSID)"))
+            }
+            noteSecret(&networkChanges, id: "network.wifiPsk", title: "Wi-Fi password", radio: PhoneAPICodec.bytes(networkFields, 4) ?? Data(), desired: wifiPSK)
+            if !networkChanges.isEmpty {
+                changes.append(contentsOf: networkChanges)
+                writes.append(.config(.network, try PhoneAPICodec.networkConfig(merging: inventory.network, ssid: wifiSSID, psk: wifiPSK)))
+            }
+            var mqttChanges: [SyncChange] = []
+            noteBool(&mqttChanges, id: "mqtt.enabled", title: "MQTT", field: 1, fields: mqttFields, desired: true)
+            noteText(&mqttChanges, id: "mqtt.address", title: "MQTT address", radio: PhoneAPICodec.textValue(mqttFields, 2), desired: profile.mqtt.address)
+            noteText(&mqttChanges, id: "mqtt.username", title: "MQTT username", radio: PhoneAPICodec.textValue(mqttFields, 3), desired: profile.mqtt.username)
+            noteSecret(&mqttChanges, id: "mqtt.password", title: "MQTT password", radio: PhoneAPICodec.bytes(mqttFields, 4) ?? Data(), desired: mqttPassword)
+            noteBool(&mqttChanges, id: "mqtt.encryption", title: "MQTT encryption", field: 5, fields: mqttFields, desired: false)
+            noteBool(&mqttChanges, id: "mqtt.json", title: "MQTT JSON", field: 6, fields: mqttFields, desired: false)
+            noteBool(&mqttChanges, id: "mqtt.tls", title: "MQTT TLS", field: 7, fields: mqttFields, desired: false)
+            noteText(&mqttChanges, id: "mqtt.root", title: "MQTT root", radio: PhoneAPICodec.textValue(mqttFields, 8), desired: profile.mqtt.root)
+            noteBool(&mqttChanges, id: "mqtt.proxy", title: "MQTT proxy", field: 9, fields: mqttFields, desired: false)
+            noteBool(&mqttChanges, id: "mqtt.mapReporting", title: "MQTT map reporting", field: 10, fields: mqttFields, desired: false)
+            if !mqttChanges.isEmpty {
+                changes.append(contentsOf: mqttChanges)
+                writes.append(.moduleMQTT(try PhoneAPICodec.mqttConfig(
+                    merging: inventory.mqtt,
+                    enabled: true,
+                    address: profile.mqtt.address,
+                    username: profile.mqtt.username,
+                    password: mqttPassword,
+                    root: profile.mqtt.root,
+                    clearBridgeFlags: true
+                )))
+            }
+        } else {
+            var mqttChanges: [SyncChange] = []
+            noteBool(&mqttChanges, id: "mqtt.enabled", title: "MQTT", field: 1, fields: mqttFields, desired: false)
+            if !mqttChanges.isEmpty {
+                changes.append(contentsOf: mqttChanges)
+                writes.append(.moduleMQTT(try PhoneAPICodec.mqttConfig(
+                    merging: inventory.mqtt,
+                    enabled: false,
+                    address: nil,
+                    username: nil,
+                    password: nil,
+                    root: nil,
+                    clearBridgeFlags: false
+                )))
+            }
+        }
+
         return SyncPlan(
             changes: changes,
             writes: writes,
@@ -350,6 +431,29 @@ enum SyncDiff {
     }
 
     // MARK: - Field notes
+
+    private static func noteText(
+        _ bucket: inout [SyncChange],
+        id: String,
+        title: String,
+        radio: String,
+        desired: String
+    ) {
+        guard radio != desired else { return }
+        bucket.append(SyncChange(id: id, title: title, detail: "\(radio) → \(desired)"))
+    }
+
+    /// Password rows never include either value.
+    private static func noteSecret(
+        _ bucket: inout [SyncChange],
+        id: String,
+        title: String,
+        radio: Data,
+        desired: Data
+    ) {
+        guard radio != desired else { return }
+        bucket.append(SyncChange(id: id, title: title, detail: "•••• changed"))
+    }
 
     private static func noteBool(
         _ bucket: inout [SyncChange],
@@ -393,6 +497,7 @@ enum SyncDiff {
 
     private static func roleValue(_ role: DeviceRole) -> UInt64 {
         switch role {
+        case .client: return 0
         case .tak: return 7
         case .takTracker: return 10
         case .clientBase: return 12
@@ -401,6 +506,7 @@ enum SyncDiff {
 
     private static func roleLabel(_ value: UInt64) -> String {
         switch value {
+        case 0: return "CLIENT"
         case 7: return "TAK"
         case 10: return "TAK_TRACKER"
         case 12: return "CLIENT_BASE"
@@ -500,7 +606,7 @@ enum SyncDiff {
         let zone = Data((profile.device.timezone ?? "").utf8)
         let noisy = RadioInventory(
             lora: RawProto.message([
-                (104, .varint(1)),
+                (105, .varint(1)),
                 (11, .varint(50)),
                 (8, .varint(3)),
                 (7, .fixed32(1)),
@@ -562,7 +668,11 @@ enum SyncDiff {
             names: RadioNames(longName: "Stale", shortName: "Old"),
             longEdited: false,
             shortEdited: false,
-            psk: psk
+            psk: psk,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
         )
         guard plan.changes.map(\.id) == ["device.role"] else { return "role-only" }
         guard plan.changes.first?.detail == "TAK_TRACKER → TAK" else { return "role-detail" }
@@ -587,7 +697,11 @@ enum SyncDiff {
             names: RadioNames(longName: nil, shortName: nil),
             longEdited: false,
             shortEdited: false,
-            psk: psk
+            psk: psk,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
         )
         guard again.changes.isEmpty, again.writes.isEmpty else { return "second-plan" }
         let done = ApplyStepRow.rows(state: .verifying, progress: again.progress)
@@ -600,7 +714,11 @@ enum SyncDiff {
             names: RadioNames(longName: "Koala", shortName: nil),
             longEdited: true,
             shortEdited: false,
-            psk: psk
+            psk: psk,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
         )
         guard named.changes.map(\.id) == ["owner.long", "device.role"] else { return "long-and-role" }
         guard named.writes.count == 2 else { return "long-and-role-writes" }
@@ -637,9 +755,148 @@ enum SyncDiff {
             names: RadioNames(longName: nil, shortName: nil),
             longEdited: true,
             shortEdited: true,
-            psk: psk
+            psk: psk,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
         )
         guard zeroPlan.changes.isEmpty else { return "zero-units" }
+
+        if let problem = try trackerMQTTCheck(profile: profile, psk: psk) { return problem }
+        if let problem = try gatewayCheck(profile: profile, psk: psk) { return problem }
+        return nil
+    }
+
+    /// A radio that matches the TAK profile except Ok to MQTT, Ignore MQTT, and channel uplink/downlink.
+    private static func trackerMQTTCheck(profile: FleetProfile, psk: Data) throws -> String? {
+        var drifted = profile.lora
+        drifted.ignoreMQTT = true
+        drifted.configOkToMQTT = false
+        let inventory = RadioInventory(
+            lora: try PhoneAPICodec.loraConfig(merging: Data(), settings: drifted),
+            device: try PhoneAPICodec.deviceConfig(merging: Data(), role: .takTracker, settings: profile.device),
+            position: try PhoneAPICodec.positionConfig(merging: Data(), settings: profile.position),
+            display: try PhoneAPICodec.displayConfig(merging: Data(), settings: profile.display),
+            owner: try PhoneAPICodec.userMessage(merging: Data(), longName: "Tracker", shortName: "Trk"),
+            longName: "Tracker",
+            shortName: "Trk",
+            channels: [try PhoneAPICodec.channelMessage(
+                name: profile.channel.name,
+                psk: psk,
+                uplink: false,
+                downlink: false,
+                preciseLocation: true,
+                channelID: 0x11223344
+            )],
+            observedConfigFields: [1, 2, 5, 6],
+            observedModuleFields: [],
+            mqtt: RawProto.message([(1, .varint(1))])
+        )
+        let plan = try SyncDiff.plan(
+            inventory: inventory,
+            profile: profile,
+            role: .takTracker,
+            names: RadioNames(longName: nil, shortName: nil),
+            longEdited: false,
+            shortEdited: false,
+            psk: psk,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
+        )
+        let ids = plan.changes.map(\.id)
+        for required in ["lora.config_ok_to_mqtt", "lora.ignoreMQTT", "channel.uplink", "channel.downlink", "mqtt.enabled"] {
+            guard ids.contains(required) else { return "tracker-missing" }
+        }
+        guard plan.writes.contains(where: { if case .config(.lora, _) = $0 { return true }; return false }) else { return "tracker-lora" }
+        guard plan.writes.contains(where: { if case .channel = $0 { return true }; return false }) else { return "tracker-channel" }
+        guard plan.writes.contains(where: { if case .moduleMQTT = $0 { return true }; return false }) else { return "tracker-mqtt" }
+        guard !plan.writes.contains(where: { if case .config(.network, _) = $0 { return true }; return false }) else { return "tracker-network" }
+        let updated = try inventory.applying(plan.writes)
+        let again = try SyncDiff.plan(
+            inventory: updated,
+            profile: profile,
+            role: .takTracker,
+            names: RadioNames(longName: nil, shortName: nil),
+            longEdited: false,
+            shortEdited: false,
+            psk: psk,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
+        )
+        guard again.changes.isEmpty, again.writes.isEmpty else { return "tracker-second" }
+        return nil
+    }
+
+    /// Gateway writes network and the MQTT module in one plan. Passwords stay out of the debug list.
+    private static func gatewayCheck(profile: FleetProfile, psk: Data) throws -> String? {
+        let wifiPSK = Data("wifi-secret".utf8)
+        let mqttPassword = Data("mqtt-secret".utf8)
+        let inventory = RadioInventory(
+            lora: try PhoneAPICodec.loraConfig(merging: Data(), settings: profile.lora),
+            device: try PhoneAPICodec.deviceConfig(merging: Data(), role: .client, settings: profile.device),
+            position: try PhoneAPICodec.positionConfig(merging: Data(), settings: profile.position),
+            display: try PhoneAPICodec.displayConfig(merging: Data(), settings: profile.display),
+            owner: try PhoneAPICodec.userMessage(merging: Data(), longName: "Gateway", shortName: "Gw"),
+            longName: "Gateway",
+            shortName: "Gw",
+            channels: [try PhoneAPICodec.channelMessage(
+                name: profile.channel.name,
+                psk: psk,
+                uplink: true,
+                downlink: true,
+                preciseLocation: true,
+                channelID: 0x11223344
+            )],
+            observedConfigFields: [1, 2, 4, 5, 6],
+            observedModuleFields: [1]
+        )
+        let plan = try SyncDiff.plan(
+            inventory: inventory,
+            profile: profile,
+            role: .client,
+            names: RadioNames(longName: nil, shortName: nil),
+            longEdited: false,
+            shortEdited: false,
+            psk: psk,
+            function: .gateway,
+            wifiSSID: "OTS-Shop",
+            wifiPSK: wifiPSK,
+            mqttPassword: mqttPassword
+        )
+        let networkWrites = plan.writes.filter { if case .config(.network, _) = $0 { return true }; return false }
+        let mqttWrites = plan.writes.filter { if case .moduleMQTT = $0 { return true }; return false }
+        guard networkWrites.count == 1, mqttWrites.count == 1 else { return "gateway-writes" }
+        guard plan.writes.count == 2 else { return "gateway-extra" }
+        let lines = plan.progress.debugLines.joined(separator: "\n")
+        guard !lines.contains("wifi-secret"), !lines.contains("mqtt-secret") else { return "gateway-leak" }
+        guard lines.contains("network.wifiPsk: •••• changed") else { return "gateway-wifi-mask" }
+        guard lines.contains("mqtt.password: •••• changed") else { return "gateway-mqtt-mask" }
+        guard case .moduleMQTT(let mqttBody) = mqttWrites[0], mqttBody.range(of: mqttPassword) != nil else {
+            return "gateway-mqtt-body"
+        }
+        guard case .config(.network, let networkBody) = networkWrites[0], networkBody.range(of: wifiPSK) != nil else {
+            return "gateway-network-body"
+        }
+        let updated = try inventory.applying(plan.writes)
+        let again = try SyncDiff.plan(
+            inventory: updated,
+            profile: profile,
+            role: .client,
+            names: RadioNames(longName: nil, shortName: nil),
+            longEdited: false,
+            shortEdited: false,
+            psk: psk,
+            function: .gateway,
+            wifiSSID: "OTS-Shop",
+            wifiPSK: wifiPSK,
+            mqttPassword: mqttPassword
+        )
+        guard again.changes.isEmpty, again.writes.isEmpty else { return "gateway-second" }
         return nil
     }
 
