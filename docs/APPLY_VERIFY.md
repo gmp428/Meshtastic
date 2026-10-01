@@ -40,7 +40,7 @@ idle
   → disconnected → idle (ready for next radio)
 ```
 
-Rewriting a section that already matches is what rebooted the radio once per section. Compare first. `commit_edit_settings` is the only reboot, and only when at least one write was queued.
+Rewriting a section that already matches is what rebooted the radio once per section. Compare decoded fields first, not serialized bytes. A missing proto3 field and an explicit 0 are the same value. Nested channel bytes are compared by name, key, uplink, downlink, and precision. `commit_edit_settings` is the only reboot, and only when at least one write was queued. The Apply screen lists only the fields that differ, plus handshake, the key check, compare, reboot when needed, and verify. **Fields that differed** shows lines such as `device.role: TAK_TRACKER → TAK`.
 
 ## Per-section writes (protobuf intent)
 
@@ -75,7 +75,7 @@ Rewriting a section that already matches is what rebooted the radio once per sec
 ### Channel
 1. Read the current primary (or index 0). Keep its channel id. Do not mint a new id on every sync.
 2. Merge name, AES-256 PSK (32 bytes from Keychain), precise location, and uplink/downlink.
-3. `set_channel` only when the merged channel bytes differ. The write is inside the same edit transaction.
+3. `set_channel` only when the channel name, key, uplink, downlink, precision, or primary role differs. The write is inside the same edit transaction. Field order inside the channel settings does not count.
 
 Sections the profile does not own (power, network, Bluetooth, security, module config) are read in the `want_config` drain and not written.
 

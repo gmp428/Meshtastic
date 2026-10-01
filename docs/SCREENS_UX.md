@@ -75,16 +75,18 @@ Gate: cannot scan until a profile and a role are set, and any typed name fits th
 
 ### 3c. Progress (single screen, step list)
 
-Title: profile name, the long name that will be on the radio (or “Long name unchanged”), the mesh badge, role chip, and a one-line summary: **3 settings will change** or **Already up to date**. The changed labels sit under that line.
+Title: profile name, the long name that will be on the radio (or “Long name unchanged”), the mesh badge, role chip, and a one-line summary: **1 setting will change** or **Already up to date**.
 
-Steps (checkmarks / spinner / fail):
+Steps are only the work this sync will do (checkmarks / spinner / fail):
 
 1. Connected & handshake  
 2. Fleet PSK ready  
 3. Compare with radio  
-4. Write changes (or “Already up to date”)  
-5. Reboot (or “No reboot”)  
+4. One row per field that differs, with the decoded change (`TAK_TRACKER → TAK`). No row for a section that already matches.  
+5. Reboot, only when at least one field differs  
 6. Verify  
+
+Under the steps, **Fields that differed** lists ids such as `device.role: TAK_TRACKER → TAK`. That list is safe to read on device: it has no PSK, passkey, or public key. The result screen keeps the same list.
 
 Footer: Cancel → disconnect, mark failed “cancelled”, return to setup.
 

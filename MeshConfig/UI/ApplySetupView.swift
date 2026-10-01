@@ -444,11 +444,6 @@ struct ApplyProgressView: View {
                     if let progress = session.syncProgress {
                         Text(progress.summary)
                             .font(.subheadline.weight(.semibold))
-                        if !progress.titles.isEmpty {
-                            Text(progress.titles.joined(separator: ", "))
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
                     }
                     ProgressView(value: Double(doneCount), total: Double(steps.count))
                         .padding(.top, 4)
@@ -471,6 +466,14 @@ struct ApplyProgressView: View {
                         }
                     }
                     .padding(.vertical, 6)
+                }
+            }
+            if let progress = session.syncProgress {
+                Section("Fields that differed") {
+                    ForEach(progress.debugLines, id: \.self) { line in
+                        Text(line)
+                            .font(.footnote.monospaced())
+                    }
                 }
             }
         }
@@ -512,119 +515,6 @@ struct ApplyProgressView: View {
     }
 }
 
-enum ApplyStepStatus {
-    case waiting, current, done, failed
-}
-
-struct ApplyStepRow: Identifiable {
-    var id: String
-    var title: String
-    var status: ApplyStepStatus
-    var detail: String?
-
-    static func rows(state: ApplySessionState, progress: SyncProgress?) -> [ApplyStepRow] {
-        let titles = [
-            "Connected & handshake",
-            "Fleet PSK ready",
-            "Compare with radio",
-            "Write changes",
-            "Reboot",
-            "Verify",
-        ]
-        let ids = ["handshake", "psk", "compare", "write", "reboot", "verify"]
-        let failedIndex = failedStepIndex(state)
-        let currentIndex = failedIndex ?? activeStepIndex(state)
-
-        return titles.indices.map { index in
-            let status: ApplyStepStatus
-            if let failedIndex {
-                if index < failedIndex {
-                    status = .done
-                } else if index == failedIndex {
-                    status = .failed
-                } else {
-                    status = .waiting
-                }
-            } else if state == .succeeded {
-                status = .done
-            } else if index < currentIndex {
-                status = .done
-            } else if index == currentIndex {
-                status = .current
-            } else {
-                status = .waiting
-            }
-            let detail = detailText(state, index: index, status: status, progress: progress)
-            return ApplyStepRow(id: ids[index], title: titles[index], status: status, detail: detail)
-        }
-    }
-
-    private static func failedStepIndex(_ state: ApplySessionState) -> Int? {
-        guard case .failed(let failure) = state else { return nil }
-        return activeStepIndex(failure.stage)
-    }
-
-    private static func activeStepIndex(_ state: ApplySessionState) -> Int {
-        switch state {
-        case .idle, .scanning, .connecting, .handshaking:
-            return 0
-        case .ensuringPSK:
-            return 1
-        case .comparing:
-            return 2
-        case .applyingChanges:
-            return 3
-        case .waitingReboot, .reconnecting:
-            return 4
-        case .verifying, .succeeded, .disconnecting, .disconnected:
-            return 5
-        case .failed:
-            return 0
-        }
-    }
-
-    private static func detailText(
-        _ state: ApplySessionState,
-        index: Int,
-        status: ApplyStepStatus,
-        progress: SyncProgress?
-    ) -> String? {
-        if let progress, status == .done || state == .succeeded {
-            if index == 2 { return progress.summary }
-            if index == 3 {
-                return progress.isEmpty ? "Already up to date" : progress.titles.joined(separator: ", ")
-            }
-            if index == 4, progress.isEmpty { return "No reboot" }
-        }
-        guard status == .current || status == .failed else { return nil }
-        switch state {
-        case .connecting:
-            return "Connecting"
-        case .handshaking:
-            return "PhoneAPI handshake"
-        case .ensuringPSK:
-            return "Checking the Keychain"
-        case .comparing:
-            return "Reading the radio and comparing"
-        case .applyingChanges:
-            if let progress {
-                return progress.isEmpty ? "Already up to date" : progress.titles.joined(separator: ", ")
-            }
-            return "Writing"
-        case .waitingReboot:
-            return "Waiting for the radio to reboot. Trackers can take a minute."
-        case .reconnecting:
-            return "Waiting for Bluetooth to come back, then handshake"
-        case .verifying:
-            return "Reading back"
-        case .failed(let failure):
-            return failure.message
-        default:
-            return nil
-        }
-    }
-}
-
 struct ApplyResultView: View {
     var outcome: ApplyOutcome
     var nextDevice: () -> Void
@@ -652,6 +542,16 @@ struct ApplyResultView: View {
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+
+                DisclosureGroup("Fields that differed") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(outcome.fieldDiffs, id: \.self) { line in
+                            Text(line)
+                                .font(.footnote.monospaced())
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
                 if outcome.passed {
                     DisclosureGroup("Checklist") {

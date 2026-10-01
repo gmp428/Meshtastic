@@ -126,6 +126,11 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
                 "PhoneAPI encoder self-check failed. This build will not write to the radio."
             )
         }
+        if let problem = SyncDiff.selfCheck() {
+            throw MeshtasticBLEError.adminFailed(
+                "Sync diff self-check failed (\(problem)). This build will not write to the radio."
+            )
+        }
         guard connectedPeripheral != nil, toRadio != nil, fromRadio != nil, fromNum != nil else {
             throw MeshtasticBLEError.notConnected
         }

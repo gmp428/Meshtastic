@@ -259,7 +259,7 @@ enum PhoneAPICodec {
     }
 
     /// Patches the primary channel and keeps its id. A new id is used only when the radio has none.
-    /// Callers compare the result with `canonical` so an identical channel is not written again.
+    /// Nested settings are re-encoded, so byte equality with the radio's channel is not a diff.
     static func mergedPrimaryChannel(
         existing: Data?,
         name: String,
@@ -297,8 +297,31 @@ enum PhoneAPICodec {
         return serialize(channelFields)
     }
 
+    /// Sorts top-level fields and re-encodes those varints. Nested bytes are left as they arrived,
+    /// so this is not a field comparison.
     static func canonical(_ data: Data) throws -> Data {
         serialize(try parse(data))
+    }
+
+    /// Decoded number for a field. A missing field is 0, matching proto3. A fixed32 is accepted
+    /// so a wire-type difference is not treated as a different value.
+    static func numeric(_ fields: [Field], _ number: Int) -> UInt64 {
+        for field in fields where field.number == number {
+            switch field.value {
+            case .varint(let value):
+                return value
+            case .fixed32(let value):
+                return UInt64(value)
+            default:
+                break
+            }
+        }
+        return 0
+    }
+
+    static func textValue(_ fields: [Field], _ number: Int) -> String {
+        guard let raw = bytes(fields, number), !raw.isEmpty else { return "" }
+        return String(data: raw, encoding: .utf8) ?? ""
     }
 
     static func toRadioPacket(to node: UInt32, packetID: UInt32, admin: Data, wantResponse: Bool) -> Data {

@@ -14,6 +14,8 @@ struct ApplyOutcome: Equatable {
     var checklist: [VerifyCheckResult]
     var message: String
     var failedChecks: [String]
+    /// Decoded field lines such as `device.role: TAK_TRACKER → TAK`. No key bytes.
+    var fieldDiffs: [String]
 }
 
 /// Drives one `ApplySession` against a `FleetRadioTransport`.
@@ -389,7 +391,8 @@ final class ApplyDriver: ObservableObject {
                 shortName: session.resultShortName,
                 checklist: session.lastChecklist,
                 message: "Configured",
-                failedChecks: []
+                failedChecks: [],
+                fieldDiffs: session.syncProgress?.debugLines ?? ["Compare did not finish"]
             )
         case .failed(let failure):
             let failedLabels = session.lastChecklist.filter { failure.failedChecks.contains($0.id) }
@@ -405,7 +408,8 @@ final class ApplyDriver: ObservableObject {
                 shortName: session.resultShortName,
                 checklist: failedLabels.isEmpty ? session.lastChecklist : failedLabels,
                 message: failure.message,
-                failedChecks: failure.failedChecks
+                failedChecks: failure.failedChecks,
+                fieldDiffs: session.syncProgress?.debugLines ?? ["Compare did not finish"]
             )
         default:
             break
