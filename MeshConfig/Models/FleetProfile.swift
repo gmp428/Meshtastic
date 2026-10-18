@@ -263,16 +263,16 @@ enum DeviceRole: String, Codable, CaseIterable, Sendable {
     case client = "CLIENT"               // protobuf = 0; Wi-Fi MQTT gateway
     case tak = "TAK"                     // protobuf = 7; phone + ATAK/iTAK EUD
     case takTracker = "TAK_TRACKER"      // protobuf = 10; standalone tracker
-    case router = "ROUTER"               // protobuf = 2; fixed relay node (no Wi-Fi, no MQTT)
-    case clientBase = "CLIENT_BASE"      // fixed infrastructure; not default TAK profile
+    case router = "ROUTER"               // protobuf = 2; tower/mountaintop relay (no Wi-Fi, no MQTT)
+    case clientBase = "CLIENT_BASE"      // protobuf = 12; rooftop relay that favors favorited nodes (no Wi-Fi, no MQTT)
 
     var displayName: String {
         switch self {
         case .client: return "Client (gateway)"
         case .tak: return "TAK (paired with ATAK/iTAK)"
         case .takTracker: return "TAK Tracker (standalone)"
-        case .router: return "Router (fixed relay)"
-        case .clientBase: return "Client Base (fixed node)"
+        case .router: return "Router (tower/mountaintop)"
+        case .clientBase: return "Client Base (rooftop relay)"
         }
     }
 
@@ -295,14 +295,14 @@ enum DeviceRole: String, Codable, CaseIterable, Sendable {
         case .takTracker:
             return "Use for standalone trackers with no ATAK EUD on the same phone."
         case .router:
-            return "Fixed relay that rebroadcasts the fleet toward the gateway. Meshtastic reserves ROUTER for nodes with exceptional coverage. No Wi-Fi is written and MQTT on this radio stays off."
+            return "Infrastructure relay for a tower or mountaintop with exceptional coverage. Meshtastic says not to use ROUTER on roofs; pick Client Base for a rooftop relay. No Wi-Fi is written and MQTT on this radio stays off."
         case .clientBase:
-            return "Fixed high node; router for favorites. Separate from the TAK fleet profile."
+            return "Recommended for a rooftop relay. Acts like Client, but relays packets to or from favorited nodes like a router. Favorite the trackers and the gateway on this radio in the Meshtastic app; Mesh Config does not set favorites. No Wi-Fi is written and MQTT on this radio stays off."
         }
     }
 }
 
-/// Per-device job in the TAK fleet. A non-gateway keeps the chosen role (TAK, TAK Tracker, or Router).
+/// Per-device job in the TAK fleet. A non-gateway keeps the chosen role (TAK, TAK Tracker, Client Base, or Router).
 /// A gateway is CLIENT. Raw values are persisted; do not rename them.
 enum DeviceFunction: String, Codable, CaseIterable, Sendable {
     case tracker
@@ -318,7 +318,7 @@ enum DeviceFunction: String, Codable, CaseIterable, Sendable {
     var shortHelp: String {
         switch self {
         case .tracker:
-            return "Not a gateway. MQTT on this radio stays off and no Wi-Fi is written. Role is TAK Tracker, TAK, or Router (fixed relay)."
+            return "Not a gateway. MQTT on this radio stays off and no Wi-Fi is written. Role is TAK Tracker, TAK, Client Base (rooftop relay), or Router (tower/mountaintop)."
         case .gateway:
             return "Heltec-style node. Role CLIENT, Wi-Fi on, MQTT module pointed at OpenTAKServer."
         }

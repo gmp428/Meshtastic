@@ -65,6 +65,7 @@ struct ProfileEditorView: View {
                 Picker("Default role", selection: $profile.defaultRole) {
                     Text(DeviceRole.takTracker.displayName).tag(DeviceRole.takTracker)
                     Text(DeviceRole.tak.displayName).tag(DeviceRole.tak)
+                    Text(DeviceRole.clientBase.displayName).tag(DeviceRole.clientBase)
                     Text(DeviceRole.router.displayName).tag(DeviceRole.router)
                 }
                 LabeledContent("Rebroadcast", value: "ALL")

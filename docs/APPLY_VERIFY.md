@@ -5,7 +5,7 @@
 - **One active BLE connection.** Never connect a second radio until the current session reaches `disconnected` (success or failed-and-cleaned-up).
 - **Same `FleetProfile` + Keychain PSK** for every radio that should share the mesh.
 - **Function is chosen per device** at session start: Tracker (default) or Gateway.
-- **Role is chosen per non-gateway radio**: `TAK` (phone + ATAK/iTAK), `TAK_TRACKER` (standalone), or `ROUTER` (protobuf 2, fixed relay). A gateway is always `CLIENT`.
+- **Role is chosen per non-gateway radio**: `TAK` (phone + ATAK/iTAK), `TAK_TRACKER` (standalone), `CLIENT_BASE` (protobuf 12, rooftop relay; favorite the trackers and gateway in the Meshtastic app), or `ROUTER` (protobuf 2, tower/mountaintop). A gateway is always `CLIENT`.
 - **Names are chosen per device** at session start. They are not a fleet-wide setting. **Long name** is the Meshtastic name ATAK shows as the callsign / PLI name (24 UTF-8 bytes). **Short name** is the 4-byte mesh badge. A blank field is left unchanged. Both blank sends no owner change. A non-blank field is written only when it differs from the radio.
 - PSK bytes leave Keychain only for the Channel write; never log them.
 - Heltec V3 / T114 / T1000-E: BLE config path is the same. T114 has no Wi‑Fi and stays a Tracker. A V3 gateway gets Wi‑Fi; that disables Bluetooth after reboot.
@@ -67,7 +67,7 @@ Rewriting a section that already matches is what rebooted the radio once per sec
 - region = profile region (US default)
 
 ### Device (`Config.Device`)
-- Tracker: `role` = session role (`TAK`, `TAK_TRACKER`, or `ROUTER`). No Wi-Fi is written and MQTT stays off, same as any tracker.
+- Tracker: `role` = session role (`TAK`, `TAK_TRACKER`, `CLIENT_BASE`, or `ROUTER`). No Wi-Fi is written and MQTT stays off, same as any tracker.
 - Gateway: `role` = `CLIENT` (protobuf 0, written with force so the zero is not omitted)
 - `rebroadcast_mode = ALL` (CORE_PORTNUMS_ONLY drops ATAK_PLUGIN port 72)
 - optional `tzdef` for standalones

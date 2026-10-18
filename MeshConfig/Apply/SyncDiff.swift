@@ -769,13 +769,26 @@ enum SyncDiff {
         if let problem = try trackerMQTTCheck(profile: profile, psk: psk) { return problem }
         if let problem = try rebroadcastCheck(profile: profile, psk: psk) { return problem }
         if let problem = try gatewayCheck(profile: profile, psk: psk) { return problem }
-        if let problem = try routerCheck(profile: profile, psk: psk) { return problem }
+        if let problem = try relayCheck(profile: profile, psk: psk, role: .router, wire: 2, label: "ROUTER", tag: "router") {
+            return problem
+        }
+        if let problem = try relayCheck(profile: profile, psk: psk, role: .clientBase, wire: 12, label: "CLIENT_BASE", tag: "client-base") {
+            return problem
+        }
         return nil
     }
 
-    /// A fixed relay set to ROUTER (protobuf 2) on a radio that otherwise matches the profile.
-    /// Only `device.role` changes. No network or MQTT write, so an nRF52 without Wi-Fi is untouched there.
-    private static func routerCheck(profile: FleetProfile, psk: Data) throws -> String? {
+    /// A fixed relay set to ROUTER (protobuf 2) or CLIENT_BASE (protobuf 12) on a radio that otherwise
+    /// matches the profile. Only `device.role` changes. No network or MQTT write, so an nRF52 without
+    /// Wi-Fi is untouched there. `tag` keeps failure labels distinct per role.
+    private static func relayCheck(
+        profile: FleetProfile,
+        psk: Data,
+        role: DeviceRole,
+        wire: UInt64,
+        label: String,
+        tag: String
+    ) throws -> String? {
         let inventory = RadioInventory(
             lora: try PhoneAPICodec.loraConfig(merging: Data(), settings: profile.lora),
             device: try PhoneAPICodec.deviceConfig(merging: Data(), role: .takTracker, settings: profile.device),
@@ -798,7 +811,7 @@ enum SyncDiff {
         let plan = try SyncDiff.plan(
             inventory: inventory,
             profile: profile,
-            role: .router,
+            role: role,
             names: RadioNames(longName: nil, shortName: nil),
             longEdited: false,
             shortEdited: false,
@@ -808,15 +821,15 @@ enum SyncDiff {
             wifiPSK: Data(),
             mqttPassword: Data()
         )
-        guard plan.changes.map(\.id) == ["device.role"] else { return "router-only" }
-        guard plan.changes.first?.detail == "TAK_TRACKER → ROUTER" else { return "router-detail" }
-        guard plan.writes.count == 1, case .config(.device, let body) = plan.writes.first else { return "router-write" }
-        guard PhoneAPICodec.numeric(try PhoneAPICodec.parse(body), 1) == 2 else { return "router-value" }
+        guard plan.changes.map(\.id) == ["device.role"] else { return "\(tag)-only" }
+        guard plan.changes.first?.detail == "TAK_TRACKER → \(label)" else { return "\(tag)-detail" }
+        guard plan.writes.count == 1, case .config(.device, let body) = plan.writes.first else { return "\(tag)-write" }
+        guard PhoneAPICodec.numeric(try PhoneAPICodec.parse(body), 1) == wire else { return "\(tag)-value" }
         let updated = try inventory.applying(plan.writes)
         let again = try SyncDiff.plan(
             inventory: updated,
             profile: profile,
-            role: .router,
+            role: role,
             names: RadioNames(longName: nil, shortName: nil),
             longEdited: false,
             shortEdited: false,
@@ -826,7 +839,7 @@ enum SyncDiff {
             wifiPSK: Data(),
             mqttPassword: Data()
         )
-        guard again.changes.isEmpty, again.writes.isEmpty else { return "router-second" }
+        guard again.changes.isEmpty, again.writes.isEmpty else { return "\(tag)-second" }
         let back = try SyncDiff.plan(
             inventory: updated,
             profile: profile,
@@ -840,7 +853,7 @@ enum SyncDiff {
             wifiPSK: Data(),
             mqttPassword: Data()
         )
-        guard back.changes.map(\.detail) == ["ROUTER → TAK_TRACKER"] else { return "router-back" }
+        guard back.changes.map(\.detail) == ["\(label) → TAK_TRACKER"] else { return "\(tag)-back" }
         return nil
     }
 
