@@ -263,6 +263,7 @@ enum DeviceRole: String, Codable, CaseIterable, Sendable {
     case client = "CLIENT"               // protobuf = 0; Wi-Fi MQTT gateway
     case tak = "TAK"                     // protobuf = 7; phone + ATAK/iTAK EUD
     case takTracker = "TAK_TRACKER"      // protobuf = 10; standalone tracker
+    case router = "ROUTER"               // protobuf = 2; fixed relay node (no Wi-Fi, no MQTT)
     case clientBase = "CLIENT_BASE"      // fixed infrastructure; not default TAK profile
 
     var displayName: String {
@@ -270,6 +271,7 @@ enum DeviceRole: String, Codable, CaseIterable, Sendable {
         case .client: return "Client (gateway)"
         case .tak: return "TAK (paired with ATAK/iTAK)"
         case .takTracker: return "TAK Tracker (standalone)"
+        case .router: return "Router (fixed relay)"
         case .clientBase: return "Client Base (fixed node)"
         }
     }
@@ -279,6 +281,7 @@ enum DeviceRole: String, Codable, CaseIterable, Sendable {
         case .client: return "Client"
         case .tak: return "TAK"
         case .takTracker: return "TAK Tracker"
+        case .router: return "Router"
         case .clientBase: return "Client Base"
         }
     }
@@ -291,13 +294,16 @@ enum DeviceRole: String, Codable, CaseIterable, Sendable {
             return "Use when this radio is BLE-paired to a phone running ATAK/iTAK + Meshtastic Local TAK Server."
         case .takTracker:
             return "Use for standalone trackers with no ATAK EUD on the same phone."
+        case .router:
+            return "Fixed relay that rebroadcasts the fleet toward the gateway. Meshtastic reserves ROUTER for nodes with exceptional coverage. No Wi-Fi is written and MQTT on this radio stays off."
         case .clientBase:
             return "Fixed high node; router for favorites. Separate from the TAK fleet profile."
         }
     }
 }
 
-/// Per-device job in the TAK fleet. Trackers keep the chosen TAK role. A gateway is CLIENT.
+/// Per-device job in the TAK fleet. A non-gateway keeps the chosen role (TAK, TAK Tracker, or Router).
+/// A gateway is CLIENT. Raw values are persisted; do not rename them.
 enum DeviceFunction: String, Codable, CaseIterable, Sendable {
     case tracker
     case gateway
@@ -312,7 +318,7 @@ enum DeviceFunction: String, Codable, CaseIterable, Sendable {
     var shortHelp: String {
         switch self {
         case .tracker:
-            return "Position source. MQTT on this radio stays off. Role is TAK or TAK Tracker."
+            return "Not a gateway. MQTT on this radio stays off and no Wi-Fi is written. Role is TAK Tracker, TAK, or Router (fixed relay)."
         case .gateway:
             return "Heltec-style node. Role CLIENT, Wi-Fi on, MQTT module pointed at OpenTAKServer."
         }

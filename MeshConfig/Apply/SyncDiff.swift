@@ -498,6 +498,7 @@ enum SyncDiff {
     private static func roleValue(_ role: DeviceRole) -> UInt64 {
         switch role {
         case .client: return 0
+        case .router: return 2
         case .tak: return 7
         case .takTracker: return 10
         case .clientBase: return 12
@@ -507,6 +508,7 @@ enum SyncDiff {
     private static func roleLabel(_ value: UInt64) -> String {
         switch value {
         case 0: return "CLIENT"
+        case 2: return "ROUTER"
         case 7: return "TAK"
         case 10: return "TAK_TRACKER"
         case 12: return "CLIENT_BASE"
@@ -767,6 +769,78 @@ enum SyncDiff {
         if let problem = try trackerMQTTCheck(profile: profile, psk: psk) { return problem }
         if let problem = try rebroadcastCheck(profile: profile, psk: psk) { return problem }
         if let problem = try gatewayCheck(profile: profile, psk: psk) { return problem }
+        if let problem = try routerCheck(profile: profile, psk: psk) { return problem }
+        return nil
+    }
+
+    /// A fixed relay set to ROUTER (protobuf 2) on a radio that otherwise matches the profile.
+    /// Only `device.role` changes. No network or MQTT write, so an nRF52 without Wi-Fi is untouched there.
+    private static func routerCheck(profile: FleetProfile, psk: Data) throws -> String? {
+        let inventory = RadioInventory(
+            lora: try PhoneAPICodec.loraConfig(merging: Data(), settings: profile.lora),
+            device: try PhoneAPICodec.deviceConfig(merging: Data(), role: .takTracker, settings: profile.device),
+            position: try PhoneAPICodec.positionConfig(merging: Data(), settings: profile.position),
+            display: try PhoneAPICodec.displayConfig(merging: Data(), settings: profile.display),
+            owner: try PhoneAPICodec.userMessage(merging: Data(), longName: "Relay", shortName: "Rly"),
+            longName: "Relay",
+            shortName: "Rly",
+            channels: [try PhoneAPICodec.channelMessage(
+                name: profile.channel.name,
+                psk: psk,
+                uplink: true,
+                downlink: true,
+                preciseLocation: true,
+                channelID: 0x11223344
+            )],
+            observedConfigFields: [1, 2, 5, 6],
+            observedModuleFields: []
+        )
+        let plan = try SyncDiff.plan(
+            inventory: inventory,
+            profile: profile,
+            role: .router,
+            names: RadioNames(longName: nil, shortName: nil),
+            longEdited: false,
+            shortEdited: false,
+            psk: psk,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
+        )
+        guard plan.changes.map(\.id) == ["device.role"] else { return "router-only" }
+        guard plan.changes.first?.detail == "TAK_TRACKER → ROUTER" else { return "router-detail" }
+        guard plan.writes.count == 1, case .config(.device, let body) = plan.writes.first else { return "router-write" }
+        guard PhoneAPICodec.numeric(try PhoneAPICodec.parse(body), 1) == 2 else { return "router-value" }
+        let updated = try inventory.applying(plan.writes)
+        let again = try SyncDiff.plan(
+            inventory: updated,
+            profile: profile,
+            role: .router,
+            names: RadioNames(longName: nil, shortName: nil),
+            longEdited: false,
+            shortEdited: false,
+            psk: psk,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
+        )
+        guard again.changes.isEmpty, again.writes.isEmpty else { return "router-second" }
+        let back = try SyncDiff.plan(
+            inventory: updated,
+            profile: profile,
+            role: .takTracker,
+            names: RadioNames(longName: nil, shortName: nil),
+            longEdited: false,
+            shortEdited: false,
+            psk: psk,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
+        )
+        guard back.changes.map(\.detail) == ["ROUTER → TAK_TRACKER"] else { return "router-back" }
         return nil
     }
 

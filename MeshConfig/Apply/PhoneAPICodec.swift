@@ -922,6 +922,7 @@ enum PhoneAPICodec {
     private static func roleValue(_ role: DeviceRole) -> UInt64 {
         switch role {
         case .client: return 0
+        case .router: return 2
         case .tak: return 7
         case .takTracker: return 10
         case .clientBase: return 12
@@ -931,6 +932,7 @@ enum PhoneAPICodec {
     private static func deviceRole(_ value: UInt64) -> DeviceRole? {
         switch value {
         case 0: return .client
+        case 2: return .router
         case 7: return .tak
         case 10: return .takTracker
         case 12: return .clientBase

@@ -45,7 +45,7 @@ Sections matching the model: LoRa, Channel, Device defaults, Position, Display, 
 | Ok to MQTT | Locked On |
 | Hop limit | Locked 3 |
 | Transmit | Locked On |
-| Default role | Segmented: TAK Tracker \| TAK |
+| Default role | Segmented: TAK Tracker \| TAK \| Router |
 | Rebroadcast | ALL (locked; CORE_PORTNUMS_ONLY drops ATAK chat) |
 | Smart Position | Toggle |
 | Altitude | Show “HAE (ALTITUDE)” read-only correct; no MSL toggle on TAK template |
@@ -81,6 +81,7 @@ Sections matching the model: LoRa, Channel, Device defaults, Position, Display, 
 3. **Role for this device** — shown for a tracker only. Required segmented control:
    - **TAK Tracker** — standalone
    - **TAK** — this phone will run ATAK/iTAK + Local TAK Server
+   - **Router** — fixed relay (Meshtastic `ROUTER`, protobuf 2). No Wi-Fi, MQTT off, same fleet LoRa/channel/PSK
 4. Short help under role (from `DeviceRole.shortHelp`)
 5. **Name on TAK** — optional **long name** (the Meshtastic name ATAK shows as this radio’s callsign) and optional **short name** (the 4-byte mesh badge). Blank means leave that field alone. Both blank sends no name change. A roster row, Re-apply, or a scan hit that matches a roster peripheral fills the last synced names. Those fills are not edits. After connect, names read from the radio replace an unedited prefill.
 6. Primary: **Scan for radios**
@@ -133,7 +134,7 @@ Footer: Cancel → disconnect, mark failed “cancelled”, return to setup.
 | Rule | Why |
 | --- | --- |
 | Function asked every device | Tracker vs gateway is a different radio job |
-| Role asked every tracker | Stops TAK vs TAK_TRACKER mix-ups |
+| Role asked every tracker | Stops TAK vs TAK_TRACKER vs ROUTER mix-ups |
 | Long name is per device, and optional | TAK callsign is per radio. Blank leaves the radio’s name alone. |
 | Next device never auto-connects | Wrong board risk |
 | One session at a time | BLE constraint |
@@ -196,7 +197,7 @@ A failed attempt does not replace a long name that already verified.
 
 ### Device detail
 - Function picker (Tracker / Gateway). Gateway forces role CLIENT and can pick a saved Wi-Fi network when the profile has more than one. Changing function sets Needs re-apply and does not write Bluetooth.
-- Role picker (TAK Tracker / TAK) for a tracker — changing sets `roleChangedNeedsReapply`
+- Role picker (TAK Tracker / TAK / Router) for a tracker — changing sets `roleChangedNeedsReapply`
 - Profile (read-only link, or switch profile with confirm)
 - **Re-apply now** → Apply flow prefilled with this device’s profile, role, and last applied names; prefer reconnect by peripheralID. The names can still be edited before scan.
 - Notes field
