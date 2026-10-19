@@ -46,7 +46,7 @@ Sections matching the model: LoRa, Channel, Device defaults, Position, Display, 
 | Hop limit | Locked 3 |
 | Transmit | Locked On |
 | Default role | Segmented: TAK Tracker \| TAK \| Client Base \| Router |
-| Rebroadcast | ALL (locked; CORE_PORTNUMS_ONLY drops ATAK chat) |
+| Rebroadcast mode | Picker: Local only (recommended, default for new profiles) \| All \| Known only, with help text. Applies to every radio and role. Saved profiles without the field load as ALL. CORE_PORTNUMS_ONLY (drops ATAK chat) and NONE are not offered. The profile list summary shows the mode. |
 | Smart Position | Toggle |
 | Altitude | Show “HAE (ALTITUDE)” read-only correct; no MSL toggle on TAK template |
 | Units | Imperial / Metric |

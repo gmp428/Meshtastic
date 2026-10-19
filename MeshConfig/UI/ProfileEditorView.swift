@@ -68,7 +68,14 @@ struct ProfileEditorView: View {
                     Text(DeviceRole.clientBase.displayName).tag(DeviceRole.clientBase)
                     Text(DeviceRole.router.displayName).tag(DeviceRole.router)
                 }
-                LabeledContent("Rebroadcast", value: "ALL")
+                Picker("Rebroadcast mode", selection: $profile.device.rebroadcastMode) {
+                    ForEach(RebroadcastMode.fleetChoices, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                Text(profile.device.rebroadcastMode.shortHelp + " Applied to every radio in this fleet, every role.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 TextField("Time zone (optional POSIX TZ)", text: timezoneText)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()

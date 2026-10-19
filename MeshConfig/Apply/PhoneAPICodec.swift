@@ -944,6 +944,7 @@ enum PhoneAPICodec {
         switch mode {
         case .all: return 0
         case .localOnly: return 2
+        case .knownOnly: return 3
         case .none: return 4
         }
     }
@@ -952,6 +953,7 @@ enum PhoneAPICodec {
         switch value {
         case 0: return .all
         case 2: return .localOnly
+        case 3: return .knownOnly
         case 4: return RebroadcastMode.none
         default: return nil
         }

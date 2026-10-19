@@ -28,7 +28,7 @@ struct FleetProfile: Identifiable, Codable, Hashable, Sendable {
 
 extension FleetProfile {
     /// TAK template locks. Slot, region, channel name, MQTT address, Wi-Fi SSID,
-    /// smart position, geoidal separation, units, notes, and the default role stay editable.
+    /// smart position, geoidal separation, units, notes, rebroadcast mode, and the default role stay editable.
     /// Altitude is always the HAE path: ALTITUDE on, ALTITUDE_MSL off.
     /// Ignore MQTT stays off and Ok to MQTT stays on so a gateway will upload the fleet.
     mutating func applyTAKTemplateLocks() {
@@ -38,8 +38,13 @@ extension FleetProfile {
         lora.configOkToMQTT = true
         lora.hopLimit = 3
         lora.txEnabled = true
-        // ALL, not CORE_PORTNUMS_ONLY. That mode drops ATAK_PLUGIN (port 72), so OTS chat never reaches a tracker.
-        device.rebroadcastMode = .all
+        // Rebroadcast is a fleet setting: ALL, LOCAL_ONLY, or KNOWN_ONLY. CORE_PORTNUMS_ONLY is not offered
+        // because it drops ATAK_PLUGIN (port 72), so OTS chat never reaches a tracker. NONE is not offered:
+        // firmware only permits it for SENSOR, TRACKER, and TAK_TRACKER, and it would stop a relay or gateway
+        // from forwarding. A NONE value from a hand-edited file falls back to ALL, the radio default.
+        if !device.rebroadcastMode.isFleetSelectable {
+            device.rebroadcastMode = .all
+        }
         position.flags.altitude = true
         position.flags.altitudeMSL = false
         channel.preciseLocation = true
@@ -253,10 +258,30 @@ struct WifiNetwork: Identifiable, Codable, Hashable, Sendable {
 
 // MARK: - Device (Config.Device)
 
-struct DeviceSettings: Codable, Hashable, Sendable {
+struct DeviceSettings: Hashable, Sendable {
+    /// Meshtastic `Config.DeviceConfig.rebroadcast_mode`. Same value on every radio in the fleet, every role.
     var rebroadcastMode: RebroadcastMode
     /// Optional POSIX TZ for standalones (Chaos Koalas example for US Eastern).
     var timezone: String?
+}
+
+extension DeviceSettings: Codable {
+    enum CodingKeys: String, CodingKey {
+        case rebroadcastMode, timezone
+    }
+
+    /// A saved profile without `rebroadcastMode` decodes as ALL, the radio default, so nothing changes silently.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        rebroadcastMode = try container.decodeIfPresent(RebroadcastMode.self, forKey: .rebroadcastMode) ?? .all
+        timezone = try container.decodeIfPresent(String.self, forKey: .timezone)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(rebroadcastMode, forKey: .rebroadcastMode)
+        try container.encodeIfPresent(timezone, forKey: .timezone)
+    }
 }
 
 enum DeviceRole: String, Codable, CaseIterable, Sendable {
@@ -325,10 +350,50 @@ enum DeviceFunction: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// Meshtastic `Config.DeviceConfig.RebroadcastMode` (protobufs ad0bf31: ALL = 0, LOCAL_ONLY = 2,
+/// KNOWN_ONLY = 3, NONE = 4). ALL_SKIP_DECODING (1, repeater only) and CORE_PORTNUMS_ONLY (5, drops
+/// ATAK_PLUGIN) are read back for display but are not modeled as profile values.
 enum RebroadcastMode: String, Codable, CaseIterable, Sendable {
     case localOnly = "LOCAL_ONLY"
     case all = "ALL"
+    case knownOnly = "KNOWN_ONLY"
     case none = "NONE"
+
+    /// Values the profile editor offers. Order is the picker order.
+    static let fleetChoices: [RebroadcastMode] = [.localOnly, .all, .knownOnly]
+
+    var isFleetSelectable: Bool { Self.fleetChoices.contains(self) }
+
+    var displayName: String {
+        switch self {
+        case .all: return "All"
+        case .localOnly: return "Local only (recommended)"
+        case .knownOnly: return "Known only"
+        case .none: return "None"
+        }
+    }
+
+    var chipTitle: String {
+        switch self {
+        case .all: return "Rebroadcast ALL"
+        case .localOnly: return "Rebroadcast LOCAL_ONLY"
+        case .knownOnly: return "Rebroadcast KNOWN_ONLY"
+        case .none: return "Rebroadcast NONE"
+        }
+    }
+
+    var shortHelp: String {
+        switch self {
+        case .all:
+            return "Relays every packet heard on the same LoRa preset, including other meshes. This is the radio default."
+        case .localOnly:
+            return "Relays only packets on channels this fleet has keys for. Recommended for a private fleet."
+        case .knownOnly:
+            return "Like Local only, and also only from nodes already in the radio's node list. A new tracker is not relayed until the radio has heard it."
+        case .none:
+            return "Does not rebroadcast. Not offered for a fleet profile."
+        }
+    }
 }
 
 // MARK: - Position (Config.Position)
@@ -419,7 +484,7 @@ enum BuiltInProfiles {
                 replaceDefaultPrimary: true
             ),
             device: DeviceSettings(
-                rebroadcastMode: .all,
+                rebroadcastMode: .localOnly,
                 timezone: "EST5EDT,M3.2.0/2,M11.1.0/2" // optional; standalones
             ),
             position: PositionSettings(
@@ -517,7 +582,7 @@ enum ProfileAcceptance {
         ("ch.downlink", "Primary channel downlink is on"),
         ("dev.role", "Role matches the function chosen at apply"),
         ("owner.longName", "Long name matches when a new callsign was written"),
-        ("dev.rebroadcast", "Rebroadcast is ALL"),
+        ("dev.rebroadcast", "Rebroadcast mode matches the profile"),
         ("pos.smart", "Smart Position matches profile (on for ops)"),
         ("pos.hae", "Position flags: ALTITUDE on, ALTITUDE_MSL off"),
         ("pos.geoid", "GEOIDAL_SEPARATION on when profile requests it"),
@@ -556,7 +621,11 @@ enum ProfileAcceptance {
                     : "Long name matches the TAK callsign",
                 ok: appliedLongName == nil || snap.longName == appliedLongName
             ),
-            VerifyCheckResult(id: "dev.rebroadcast", label: "Rebroadcast is ALL", ok: snap.rebroadcastMode == .all),
+            VerifyCheckResult(
+                id: "dev.rebroadcast",
+                label: "Rebroadcast mode is \(profile.device.rebroadcastMode.rawValue)",
+                ok: snap.rebroadcastMode == profile.device.rebroadcastMode
+            ),
             VerifyCheckResult(id: "pos.smart", label: "Smart Position matches profile", ok: snap.smartPosition == profile.position.smartPosition),
             VerifyCheckResult(id: "pos.hae", label: "Altitude is HAE path (not MSL)", ok: snap.positionFlags?.isTAKAltitudeCorrect == true),
             VerifyCheckResult(id: "pos.geoid", label: "Geoidal separation matches profile", ok: snap.positionFlags?.geoidalSeparation == profile.position.flags.geoidalSeparation),

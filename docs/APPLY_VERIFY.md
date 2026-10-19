@@ -69,7 +69,7 @@ Rewriting a section that already matches is what rebooted the radio once per sec
 ### Device (`Config.Device`)
 - Tracker: `role` = session role (`TAK`, `TAK_TRACKER`, `CLIENT_BASE`, or `ROUTER`). No Wi-Fi is written and MQTT stays off, same as any tracker.
 - Gateway: `role` = `CLIENT` (protobuf 0, written with force so the zero is not omitted)
-- `rebroadcast_mode = ALL` (CORE_PORTNUMS_ONLY drops ATAK_PLUGIN port 72)
+- `rebroadcast_mode` = profile value for every role, including gateway, CLIENT_BASE, and ROUTER: `ALL` (0), `LOCAL_ONLY` (2), or `KNOWN_ONLY` (3), per meshtastic/protobufs ad0bf31 `config.proto`. Diff row `device.rebroadcast_mode`. It shares the device `set_config` with `role`, so a role change plus a mode change is one write and one reboot. ALL is proto3 0 and is written by omitting the field. CORE_PORTNUMS_ONLY (5) is never written because it drops ATAK_PLUGIN port 72.
 - optional `tzdef` for standalones
 
 ### Position (`Config.Position`)
@@ -129,7 +129,7 @@ After channel Send, read back and require **all** TAK checks green:
 10. Primary channel uplink on and downlink on  
 11. Role matches session choice (CLIENT for a gateway)  
 12. Long name matches the callsign when this sync changed it. When the long name was left alone, the row passes with the radio’s existing name.  
-13. Rebroadcast ALL  
+13. Rebroadcast mode matches the profile  
 14. Smart Position matches profile  
 15. Position flags: ALTITUDE on, ALTITUDE_MSL off  
 16. GEOIDAL_SEPARATION matches profile  
