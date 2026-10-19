@@ -91,6 +91,8 @@ struct ApplySetupView: View {
                         Text("Choose…").tag(Optional<DeviceRole>.none)
                         Text(DeviceRole.takTracker.displayName).tag(Optional(DeviceRole.takTracker))
                         Text(DeviceRole.tak.displayName).tag(Optional(DeviceRole.tak))
+                        Text(DeviceRole.clientBase.displayName).tag(Optional(DeviceRole.clientBase))
+                        Text(DeviceRole.router.displayName).tag(Optional(DeviceRole.router))
                     }
                     .pickerStyle(.inline)
                     if let role {
@@ -98,7 +100,7 @@ struct ApplySetupView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } else {
-                        Text("Ask this for every radio. TAK Tracker is a standalone. TAK is for a phone running ATAK/iTAK on the same link.")
+                        Text("Ask this for every radio. TAK Tracker is a standalone. TAK is for a phone running ATAK/iTAK on the same link. Client Base is the pick for a rooftop relay. Router is for a tower or mountaintop.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }

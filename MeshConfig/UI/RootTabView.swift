@@ -41,7 +41,7 @@ struct PSKIntroView: View {
                     .font(.title.bold())
                 Text("Mesh Config generates one AES-256 channel key for each profile and stores it in the iOS Keychain on this phone. The saved profile file keeps only a reference, not the key.")
                 Text("Apply that same profile to each radio over Bluetooth, one radio at a time. The key is not shown, pasted, or imported. If you rotate it, re-apply every radio or the mesh will split.")
-                Text("Role is chosen for each radio: TAK Tracker for a standalone, or TAK when this phone will run ATAK/iTAK with the Meshtastic app’s Local TAK Server.")
+                Text("Role is chosen for each radio: TAK Tracker for a standalone, TAK when this phone will run ATAK/iTAK with the Meshtastic app’s Local TAK Server, Client Base for a rooftop relay, or Router for a tower or mountaintop.")
                 Spacer()
                 Button("Continue", action: onContinue)
                     .buttonStyle(.borderedProminent)
@@ -69,9 +69,11 @@ struct RoleChip: View {
 
     private var color: Color {
         switch role {
+        case .client: return .blue
         case .tak: return .orange
         case .takTracker: return .teal
-        case .clientBase: return .secondary
+        case .router: return .purple
+        case .clientBase: return .indigo
         }
     }
 }

@@ -174,6 +174,8 @@ struct DeviceDetailView: View {
                         Picker("Role", selection: roleBinding) {
                             Text(DeviceRole.takTracker.displayName).tag(DeviceRole.takTracker)
                             Text(DeviceRole.tak.displayName).tag(DeviceRole.tak)
+                            Text(DeviceRole.clientBase.displayName).tag(DeviceRole.clientBase)
+                            Text(DeviceRole.router.displayName).tag(DeviceRole.router)
                         }
                         .pickerStyle(.inline)
                         Text("Changing role here does not write the radio. Status becomes Needs re-apply until you run Apply.")
