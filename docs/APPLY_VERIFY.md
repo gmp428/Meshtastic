@@ -5,7 +5,7 @@
 - **One active BLE connection.** Never connect a second radio until the current session reaches `disconnected` (success or failed-and-cleaned-up).
 - **Same `FleetProfile` + Keychain PSK** for every radio that should share the mesh.
 - **Function is chosen per device** at session start: Tracker (default) or Gateway.
-- **Role is chosen per tracker**: `TAK` (phone + ATAK/iTAK) vs `TAK_TRACKER` (standalone). A gateway is always `CLIENT`.
+- **Role is chosen per non-gateway radio**: `TAK` (phone + ATAK/iTAK), `TAK_TRACKER` (standalone), `CLIENT_BASE` (protobuf 12, rooftop relay; favorite the trackers and gateway in the Meshtastic app), or `ROUTER` (protobuf 2, tower/mountaintop). A gateway is always `CLIENT`.
 - **Names are chosen per device** at session start. They are not a fleet-wide setting. **Long name** is the Meshtastic name ATAK shows as the callsign / PLI name (24 UTF-8 bytes). **Short name** is the 4-byte mesh badge. A blank field is left unchanged. Both blank sends no owner change. A non-blank field is written only when it differs from the radio.
 - PSK bytes leave Keychain only for the Channel write; never log them.
 - Heltec V3 / T114 / T1000-E: BLE config path is the same. T114 has no Wi‑Fi and stays a Tracker. A V3 gateway gets Wi‑Fi; that disables Bluetooth after reboot.
@@ -63,13 +63,13 @@ Rewriting a section that already matches is what rebooted the radio once per sec
 - `tx_enabled = true`
 - `ignore_mqtt = false`
 - `config_ok_to_mqtt = true` (required, or a gateway drops the packet)
-- `channel_num` / frequency slot = profile (`50` for TAK ShortTurbo)
+- `channel_num` / frequency slot = profile (`50` for the TAK template)
 - region = profile region (US default)
 
 ### Device (`Config.Device`)
-- Tracker: `role` = session role (`TAK` or `TAK_TRACKER`)
+- Tracker: `role` = session role (`TAK`, `TAK_TRACKER`, `CLIENT_BASE`, or `ROUTER`). No Wi-Fi is written and MQTT stays off, same as any tracker.
 - Gateway: `role` = `CLIENT` (protobuf 0, written with force so the zero is not omitted)
-- `rebroadcast_mode = ALL` (CORE_PORTNUMS_ONLY drops ATAK_PLUGIN port 72)
+- `rebroadcast_mode` = profile value for every role, including gateway, CLIENT_BASE, and ROUTER: `ALL` (0), `LOCAL_ONLY` (2), or `KNOWN_ONLY` (3), per meshtastic/protobufs ad0bf31 `config.proto`. Diff row `device.rebroadcast_mode`. It shares the device `set_config` with `role`, so a role change plus a mode change is one write and one reboot. ALL is proto3 0 and is written by omitting the field. CORE_PORTNUMS_ONLY (5) is never written because it drops ATAK_PLUGIN port 72.
 - optional `tzdef` for standalones
 
 ### Position (`Config.Position`)
@@ -117,9 +117,9 @@ Sections the profile does not own (power, Bluetooth, security, module configs ot
 
 After channel Send, read back and require **all** TAK checks green:
 
-1. LoRa ShortTurbo  
+1. LoRa preset matches the profile  
 2. Ignore MQTT off  
-3. Ok to MQTT on  
+3. Ok to MQTT matches the profile for this function (tracker or gateway; default off)  
 4. Hop limit is 3  
 5. Transmit is on  
 6. Frequency slot matches profile  
@@ -129,7 +129,7 @@ After channel Send, read back and require **all** TAK checks green:
 10. Primary channel uplink on and downlink on  
 11. Role matches session choice (CLIENT for a gateway)  
 12. Long name matches the callsign when this sync changed it. When the long name was left alone, the row passes with the radio’s existing name.  
-13. Rebroadcast ALL  
+13. Rebroadcast mode matches the profile  
 14. Smart Position matches profile  
 15. Position flags: ALTITUDE on, ALTITUDE_MSL off  
 16. GEOIDAL_SEPARATION matches profile  

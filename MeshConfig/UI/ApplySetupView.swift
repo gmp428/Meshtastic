@@ -80,7 +80,11 @@ struct ApplySetupView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.red)
                         }
-                        Text("Gateway uses device role CLIENT. Wi-Fi is turned on, which disables Bluetooth after the radio reboots.")
+                        Picker("Gateway role", selection: gatewayRoleBinding) {
+                            Text(DeviceRole.client.displayName).tag(DeviceRole.client)
+                            Text(DeviceRole.clientBase.displayName).tag(DeviceRole.clientBase)
+                        }
+                        Text("Gateway uses device role CLIENT (or Client Base). Wi-Fi is turned on, which disables Bluetooth after the radio reboots.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -91,6 +95,8 @@ struct ApplySetupView: View {
                         Text("Choose…").tag(Optional<DeviceRole>.none)
                         Text(DeviceRole.takTracker.displayName).tag(Optional(DeviceRole.takTracker))
                         Text(DeviceRole.tak.displayName).tag(Optional(DeviceRole.tak))
+                        Text(DeviceRole.clientBase.displayName).tag(Optional(DeviceRole.clientBase))
+                        Text(DeviceRole.router.displayName).tag(Optional(DeviceRole.router))
                     }
                     .pickerStyle(.inline)
                     if let role {
@@ -98,7 +104,7 @@ struct ApplySetupView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } else {
-                        Text("Ask this for every radio. TAK Tracker is a standalone. TAK is for a phone running ATAK/iTAK on the same link.")
+                        Text("Ask this for every radio. TAK Tracker is a standalone. TAK is for a phone running ATAK/iTAK on the same link. Client Base is the pick for a rooftop relay. Router is for a tower or mountaintop.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -132,7 +138,7 @@ struct ApplySetupView: View {
                                 selectedProfileID = device.profileID
                                 function = device.function
                                 wifiNetworkID = device.wifiNetworkID
-                                role = device.function == .gateway ? .client : device.role
+                                role = device.function == .gateway ? DeviceRole.gatewayRole(device.role) : device.role
                                 fillNames(long: device.longName ?? "", short: device.shortName ?? "")
                                 preferredPeripheralID = device.peripheralID
                                 rosterDeviceID = device.id
@@ -238,7 +244,7 @@ struct ApplySetupView: View {
                 selectedProfileID = prefill.profileID
                 function = prefill.function
                 wifiNetworkID = prefill.wifiNetworkID
-                role = prefill.function == .gateway ? .client : prefill.role
+                role = prefill.function == .gateway ? DeviceRole.gatewayRole(prefill.role) : prefill.role
                 fillNames(long: prefill.longName ?? "", short: prefill.shortName ?? "")
                 preferredPeripheralID = prefill.peripheralID
                 rosterDeviceID = prefill.rosterDeviceID
@@ -336,12 +342,21 @@ struct ApplySetupView: View {
         )
     }
 
+    /// Gateway role choice: CLIENT (default) or CLIENT_BASE.
+    private var gatewayRoleBinding: Binding<DeviceRole> {
+        Binding(
+            get: { DeviceRole.gatewayRole(role) },
+            set: { role = $0 }
+        )
+    }
+
     private func startScan() async {
         guard let profile = selectedProfile else { return }
         let appliedRole: DeviceRole
         if function == .gateway {
-            appliedRole = .client
-        } else if let role {
+            appliedRole = DeviceRole.gatewayRole(role)
+        } else if let role, role != .client {
+            // CLIENT is the gateway role; a Tracker must pick one of the tracker/relay roles.
             appliedRole = role
         } else {
             return

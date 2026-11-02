@@ -27,19 +27,25 @@ struct FleetProfile: Identifiable, Codable, Hashable, Sendable {
 }
 
 extension FleetProfile {
-    /// TAK template locks. Slot, region, channel name, MQTT address, Wi-Fi SSID,
-    /// smart position, geoidal separation, units, notes, and the default role stay editable.
+    /// TAK template locks. Modem preset, slot, region, channel name, MQTT address, Wi-Fi SSID,
+    /// smart position and its distance/interval, position broadcast interval, geoidal separation, units,
+    /// notes, rebroadcast mode, and the default role stay editable.
     /// Altitude is always the HAE path: ALTITUDE on, ALTITUDE_MSL off.
-    /// Ignore MQTT stays off and Ok to MQTT stays on so a gateway will upload the fleet.
+    /// Ignore MQTT stays off on every radio so trackers receive iTAK/OTS traffic the gateway relays
+    /// from MQTT onto LoRa. Ok to MQTT is a per-profile, per-function setting (see `LoRaSettings`).
     mutating func applyTAKTemplateLocks() {
         lora.usePreset = true
-        lora.modemPreset = .shortTurbo
+        // The modem preset is a per-profile choice. A saved profile keeps the preset it decoded.
         lora.ignoreMQTT = false
-        lora.configOkToMQTT = true
         lora.hopLimit = 3
         lora.txEnabled = true
-        // ALL, not CORE_PORTNUMS_ONLY. That mode drops ATAK_PLUGIN (port 72), so OTS chat never reaches a tracker.
-        device.rebroadcastMode = .all
+        // Rebroadcast is a fleet setting: ALL, LOCAL_ONLY, or KNOWN_ONLY. CORE_PORTNUMS_ONLY is not offered
+        // because it drops ATAK_PLUGIN (port 72), so OTS chat never reaches a tracker. NONE is not offered:
+        // firmware only permits it for SENSOR, TRACKER, and TAK_TRACKER, and it would stop a relay or gateway
+        // from forwarding. A NONE value from a hand-edited file falls back to ALL, the radio default.
+        if !device.rebroadcastMode.isFleetSelectable {
+            device.rebroadcastMode = .all
+        }
         position.flags.altitude = true
         position.flags.altitudeMSL = false
         channel.preciseLocation = true
@@ -116,13 +122,23 @@ struct LoRaSettings: Hashable, Sendable {
     var hopLimit: UInt32 = 3
     /// Meshtastic `tx_enabled`. TAK fleets leave the radio transmitting.
     var txEnabled: Bool = true
-    /// Meshtastic `config_ok_to_mqtt`. Required or a gateway drops the packet.
-    var configOkToMQTT: Bool = true
+    /// Meshtastic `config_ok_to_mqtt` (field 105, "Sets the ok_to_mqtt bit on outgoing packets")
+    /// for Tracker-function radios. New profiles default OFF.
+    var configOkToMQTT: Bool = false
+    /// `config_ok_to_mqtt` for the Gateway radio. Defaults OFF: in field testing (Nov 2026) the
+    /// Heltec V4 gateway with Ok to MQTT ON broke iTAK delivery; OFF delivered. The earlier
+    /// "every radio Ok to MQTT on" rule was reverted to this per-function setting.
+    var gatewayConfigOkToMQTT: Bool = false
+
+    /// The `config_ok_to_mqtt` value Apply writes and Verify expects for this device function.
+    func okToMQTT(for function: DeviceFunction) -> Bool {
+        function == .gateway ? gatewayConfigOkToMQTT : configOkToMQTT
+    }
 }
 
 extension LoRaSettings: Codable {
     enum CodingKeys: String, CodingKey {
-        case usePreset, modemPreset, ignoreMQTT, frequencySlot, region, hopLimit, txEnabled, configOkToMQTT
+        case usePreset, modemPreset, ignoreMQTT, frequencySlot, region, hopLimit, txEnabled, configOkToMQTT, gatewayConfigOkToMQTT
     }
 
     init(from decoder: Decoder) throws {
@@ -134,7 +150,9 @@ extension LoRaSettings: Codable {
         region = try container.decode(LoRaRegion.self, forKey: .region)
         hopLimit = try container.decodeIfPresent(UInt32.self, forKey: .hopLimit) ?? 3
         txEnabled = try container.decodeIfPresent(Bool.self, forKey: .txEnabled) ?? true
-        configOkToMQTT = try container.decodeIfPresent(Bool.self, forKey: .configOkToMQTT) ?? true
+        // A saved profile keeps the tracker value it stored (older builds forced ON). Missing → OFF.
+        configOkToMQTT = try container.decodeIfPresent(Bool.self, forKey: .configOkToMQTT) ?? false
+        gatewayConfigOkToMQTT = try container.decodeIfPresent(Bool.self, forKey: .gatewayConfigOkToMQTT) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -147,20 +165,58 @@ extension LoRaSettings: Codable {
         try container.encode(hopLimit, forKey: .hopLimit)
         try container.encode(txEnabled, forKey: .txEnabled)
         try container.encode(configOkToMQTT, forKey: .configOkToMQTT)
+        try container.encode(gatewayConfigOkToMQTT, forKey: .gatewayConfigOkToMQTT)
     }
 }
 
+/// Meshtastic `Config.LoRaConfig.ModemPreset` (protobufs ad0bf31). VERY_LONG_SLOW (2) is deprecated
+/// and not modeled. LONG_SLOW (1) is deprecated in 2.7; it is decoded but only offered when already chosen.
+/// Every radio in a fleet must use the same preset or they will not hear each other.
 enum ModemPreset: String, Codable, CaseIterable, Sendable {
-    case shortTurbo = "SHORT_TURBO"   // protobuf = 8
-    case mediumFast = "MEDIUM_FAST"
-    case longFast = "LONG_FAST"       // not for TAK/ATAK bandwidth
+    case longFast = "LONG_FAST"         // 0
+    case longSlow = "LONG_SLOW"         // 1 (deprecated in 2.7)
+    case mediumSlow = "MEDIUM_SLOW"     // 3
+    case mediumFast = "MEDIUM_FAST"     // 4
+    case shortSlow = "SHORT_SLOW"       // 5
+    case shortFast = "SHORT_FAST"       // 6
+    case longModerate = "LONG_MODERATE" // 7
+    case shortTurbo = "SHORT_TURBO"     // 8
+    case longTurbo = "LONG_TURBO"       // 9
+    case liteFast = "LITE_FAST"         // 10
+    case liteSlow = "LITE_SLOW"         // 11
+    case narrowFast = "NARROW_FAST"     // 12
+    case narrowSlow = "NARROW_SLOW"     // 13
+    case tinyFast = "TINY_FAST"         // 14
+    case tinySlow = "TINY_SLOW"         // 15
+    case mediumTurbo = "MEDIUM_TURBO"   // 16
 
+    /// Labels from the proto `enum_value_metadata`.
     var displayName: String {
         switch self {
+        case .longFast: return "Long Range - Fast"
+        case .longSlow: return "Long Range - Slow (deprecated)"
+        case .mediumSlow: return "Medium Range - Slow"
+        case .mediumFast: return "Medium Range - Fast"
+        case .shortSlow: return "Short Range - Slow"
+        case .shortFast: return "Short Range - Fast"
+        case .longModerate: return "Long Range - Moderate"
         case .shortTurbo: return "Short Range - Turbo"
-        case .mediumFast: return "Medium Fast"
-        case .longFast: return "Long Fast"
+        case .longTurbo: return "Long Range - Turbo"
+        case .liteFast: return "Lite - Fast"
+        case .liteSlow: return "Lite - Slow"
+        case .narrowFast: return "Narrow - Fast"
+        case .narrowSlow: return "Narrow - Slow"
+        case .tinyFast: return "Tiny - Fast"
+        case .tinySlow: return "Tiny - Slow"
+        case .mediumTurbo: return "Medium Range - Turbo"
         }
+    }
+
+    var isDeprecated: Bool { self == .longSlow }
+
+    /// Picker choices: every non-deprecated preset, plus `current` if a saved profile already uses a deprecated one.
+    static func pickerChoices(current: ModemPreset) -> [ModemPreset] {
+        allCases.filter { !$0.isDeprecated || $0 == current }
     }
 }
 
@@ -230,6 +286,33 @@ struct MQTTSettings: Codable, Hashable, Sendable {
     var passwordRef: KeychainSecretRef
     var root: String
 
+    static let defaultPort: UInt16 = 8883
+
+    /// Meshtastic `MQTTConfig` has no port field; the firmware reads the port from `address` as `host:port`.
+    var host: String {
+        get { Self.split(address).host }
+        set { address = Self.join(host: newValue, port: port) }
+    }
+
+    var port: UInt16? {
+        get { Self.split(address).port }
+        set { address = Self.join(host: host, port: newValue) }
+    }
+
+    private static func split(_ address: String) -> (host: String, port: UInt16?) {
+        let trimmed = address.trimmingCharacters(in: .whitespaces)
+        guard let colon = trimmed.lastIndex(of: ":"), !trimmed.hasSuffix("]") else { return (trimmed, nil) }
+        let portText = trimmed[trimmed.index(after: colon)...]
+        guard let port = UInt16(portText) else { return (trimmed, nil) }
+        return (String(trimmed[..<colon]), port)
+    }
+
+    private static func join(host: String, port: UInt16?) -> String {
+        let host = host.trimmingCharacters(in: .whitespaces)
+        guard let port else { return host }
+        return "\(host):\(port)"
+    }
+
     static let openTAK = MQTTSettings(
         address: "mcsctak.duckdns.org:8883",
         username: "meshgw",
@@ -253,25 +336,52 @@ struct WifiNetwork: Identifiable, Codable, Hashable, Sendable {
 
 // MARK: - Device (Config.Device)
 
-struct DeviceSettings: Codable, Hashable, Sendable {
+struct DeviceSettings: Hashable, Sendable {
+    /// Meshtastic `Config.DeviceConfig.rebroadcast_mode`. Same value on every radio in the fleet, every role.
     var rebroadcastMode: RebroadcastMode
     /// Optional POSIX TZ for standalones (Chaos Koalas example for US Eastern).
     var timezone: String?
+}
+
+extension DeviceSettings: Codable {
+    enum CodingKeys: String, CodingKey {
+        case rebroadcastMode, timezone
+    }
+
+    /// A saved profile without `rebroadcastMode` decodes as ALL, the radio default, so nothing changes silently.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        rebroadcastMode = try container.decodeIfPresent(RebroadcastMode.self, forKey: .rebroadcastMode) ?? .all
+        timezone = try container.decodeIfPresent(String.self, forKey: .timezone)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(rebroadcastMode, forKey: .rebroadcastMode)
+        try container.encodeIfPresent(timezone, forKey: .timezone)
+    }
 }
 
 enum DeviceRole: String, Codable, CaseIterable, Sendable {
     case client = "CLIENT"               // protobuf = 0; Wi-Fi MQTT gateway
     case tak = "TAK"                     // protobuf = 7; phone + ATAK/iTAK EUD
     case takTracker = "TAK_TRACKER"      // protobuf = 10; standalone tracker
-    case clientBase = "CLIENT_BASE"      // fixed infrastructure; not default TAK profile
+    case router = "ROUTER"               // protobuf = 2; tower/mountaintop relay (no Wi-Fi, no MQTT)
+    case clientBase = "CLIENT_BASE"      // protobuf = 12; rooftop relay that favors favorited nodes (no Wi-Fi, no MQTT)
 
     var displayName: String {
         switch self {
         case .client: return "Client (gateway)"
         case .tak: return "TAK (paired with ATAK/iTAK)"
         case .takTracker: return "TAK Tracker (standalone)"
-        case .clientBase: return "Client Base (fixed node)"
+        case .router: return "Router (tower/mountaintop)"
+        case .clientBase: return "Client Base (rooftop relay)"
         }
+    }
+
+    /// Gateways run CLIENT unless CLIENT_BASE was chosen.
+    static func gatewayRole(_ role: DeviceRole?) -> DeviceRole {
+        role == .clientBase ? .clientBase : .client
     }
 
     var chipTitle: String {
@@ -279,6 +389,7 @@ enum DeviceRole: String, Codable, CaseIterable, Sendable {
         case .client: return "Client"
         case .tak: return "TAK"
         case .takTracker: return "TAK Tracker"
+        case .router: return "Router"
         case .clientBase: return "Client Base"
         }
     }
@@ -291,13 +402,16 @@ enum DeviceRole: String, Codable, CaseIterable, Sendable {
             return "Use when this radio is BLE-paired to a phone running ATAK/iTAK + Meshtastic Local TAK Server."
         case .takTracker:
             return "Use for standalone trackers with no ATAK EUD on the same phone."
+        case .router:
+            return "Infrastructure relay for a tower or mountaintop with exceptional coverage. Meshtastic says not to use ROUTER on roofs; pick Client Base for a rooftop relay. No Wi-Fi is written and MQTT on this radio stays off."
         case .clientBase:
-            return "Fixed high node; router for favorites. Separate from the TAK fleet profile."
+            return "Recommended for a rooftop relay. Acts like Client, but relays packets to or from favorited nodes like a router. Favorite the trackers and the gateway on this radio in the Meshtastic app; Mesh Config does not set favorites. No Wi-Fi is written and MQTT on this radio stays off."
         }
     }
 }
 
-/// Per-device job in the TAK fleet. Trackers keep the chosen TAK role. A gateway is CLIENT.
+/// Per-device job in the TAK fleet. A non-gateway keeps the chosen role (TAK, TAK Tracker, Client Base, or Router).
+/// A gateway is CLIENT or CLIENT_BASE. Raw values are persisted; do not rename them.
 enum DeviceFunction: String, Codable, CaseIterable, Sendable {
     case tracker
     case gateway
@@ -312,26 +426,114 @@ enum DeviceFunction: String, Codable, CaseIterable, Sendable {
     var shortHelp: String {
         switch self {
         case .tracker:
-            return "Position source. MQTT on this radio stays off. Role is TAK or TAK Tracker."
+            return "Not a gateway. MQTT on this radio stays off and no Wi-Fi is written. Role is TAK Tracker, TAK, Client Base (rooftop relay), or Router (tower/mountaintop)."
         case .gateway:
-            return "Heltec-style node. Role CLIENT, Wi-Fi on, MQTT module pointed at OpenTAKServer."
+            return "Heltec-style node. Role CLIENT (or Client Base), Wi-Fi on, MQTT module pointed at OpenTAKServer."
         }
     }
 }
 
+/// Meshtastic `Config.DeviceConfig.RebroadcastMode` (protobufs ad0bf31: ALL = 0, LOCAL_ONLY = 2,
+/// KNOWN_ONLY = 3, NONE = 4). ALL_SKIP_DECODING (1, repeater only) and CORE_PORTNUMS_ONLY (5, drops
+/// ATAK_PLUGIN) are read back for display but are not modeled as profile values.
 enum RebroadcastMode: String, Codable, CaseIterable, Sendable {
     case localOnly = "LOCAL_ONLY"
     case all = "ALL"
+    case knownOnly = "KNOWN_ONLY"
     case none = "NONE"
+
+    /// Values the profile editor offers. Order is the picker order.
+    static let fleetChoices: [RebroadcastMode] = [.localOnly, .all, .knownOnly]
+
+    var isFleetSelectable: Bool { Self.fleetChoices.contains(self) }
+
+    var displayName: String {
+        switch self {
+        case .all: return "All"
+        case .localOnly: return "Local only (recommended)"
+        case .knownOnly: return "Known only"
+        case .none: return "None"
+        }
+    }
+
+    var chipTitle: String {
+        switch self {
+        case .all: return "Rebroadcast ALL"
+        case .localOnly: return "Rebroadcast LOCAL_ONLY"
+        case .knownOnly: return "Rebroadcast KNOWN_ONLY"
+        case .none: return "Rebroadcast NONE"
+        }
+    }
+
+    var shortHelp: String {
+        switch self {
+        case .all:
+            return "Relays every packet heard on the same LoRa preset, including other meshes. This is the radio default."
+        case .localOnly:
+            return "Relays only packets on channels this fleet has keys for. Recommended for a private fleet."
+        case .knownOnly:
+            return "Like Local only, and also only from nodes already in the radio's node list. A new tracker is not relayed until the radio has heard it."
+        case .none:
+            return "Does not rebroadcast. Not offered for a fleet profile."
+        }
+    }
 }
 
 // MARK: - Position (Config.Position)
 
-struct PositionSettings: Codable, Hashable, Sendable {
+struct PositionSettings: Hashable, Sendable {
+    /// Meshtastic `position_broadcast_smart_enabled` (field 2).
     var smartPosition: Bool
     /// Bitfield intent; apply layer ORs protobuf PositionFlags.
     var flags: PositionFlagSet
     var gpsMode: GPSMode
+    /// Meshtastic `broadcast_smart_minimum_distance` (field 10), meters.
+    var smartMinimumDistance: UInt32 = PositionSettings.defaultSmartMinimumDistance
+    /// Meshtastic `broadcast_smart_minimum_interval_secs` (field 11).
+    var smartMinimumIntervalSecs: UInt32 = PositionSettings.defaultSmartMinimumIntervalSecs
+    /// Meshtastic `position_broadcast_secs` (field 1).
+    var broadcastSecs: UInt32 = PositionSettings.defaultBroadcastSecs
+    /// Meshtastic `gps_update_interval` (field 5), seconds. The Meshtastic iOS app's minimum is 30.
+    var gpsUpdateIntervalSecs: UInt32 = PositionSettings.defaultGPSUpdateIntervalSecs
+
+    static let defaultSmartMinimumDistance: UInt32 = 10
+    static let defaultSmartMinimumIntervalSecs: UInt32 = 15
+    static let defaultBroadcastSecs: UInt32 = 60
+    static let defaultGPSUpdateIntervalSecs: UInt32 = 30
+    static let minimumGPSUpdateIntervalSecs: UInt32 = 30
+}
+
+extension PositionSettings: Codable {
+    enum CodingKeys: String, CodingKey {
+        case smartPosition, flags, gpsMode, smartMinimumDistance, smartMinimumIntervalSecs, broadcastSecs, gpsUpdateIntervalSecs
+    }
+
+    /// Profiles saved before these fields existed load with the tracker defaults.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        smartPosition = try container.decodeIfPresent(Bool.self, forKey: .smartPosition) ?? true
+        flags = try container.decode(PositionFlagSet.self, forKey: .flags)
+        gpsMode = try container.decode(GPSMode.self, forKey: .gpsMode)
+        smartMinimumDistance = try container.decodeIfPresent(UInt32.self, forKey: .smartMinimumDistance)
+            ?? PositionSettings.defaultSmartMinimumDistance
+        smartMinimumIntervalSecs = try container.decodeIfPresent(UInt32.self, forKey: .smartMinimumIntervalSecs)
+            ?? PositionSettings.defaultSmartMinimumIntervalSecs
+        broadcastSecs = try container.decodeIfPresent(UInt32.self, forKey: .broadcastSecs)
+            ?? PositionSettings.defaultBroadcastSecs
+        gpsUpdateIntervalSecs = try container.decodeIfPresent(UInt32.self, forKey: .gpsUpdateIntervalSecs)
+            ?? PositionSettings.defaultGPSUpdateIntervalSecs
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(smartPosition, forKey: .smartPosition)
+        try container.encode(flags, forKey: .flags)
+        try container.encode(gpsMode, forKey: .gpsMode)
+        try container.encode(smartMinimumDistance, forKey: .smartMinimumDistance)
+        try container.encode(smartMinimumIntervalSecs, forKey: .smartMinimumIntervalSecs)
+        try container.encode(broadcastSecs, forKey: .broadcastSecs)
+        try container.encode(gpsUpdateIntervalSecs, forKey: .gpsUpdateIntervalSecs)
+    }
 }
 
 struct PositionFlagSet: Codable, Hashable, Sendable {
@@ -393,12 +595,12 @@ enum BuiltInProfiles {
         return FleetProfile(
             id: UUID(),
             name: name,
-            notes: "ShortTurbo ATAK mesh. One generated AES-256 PSK in Keychain per profile. Trackers and the gateway share the channel. The gateway Wi-Fi and MQTT passwords stay in the Keychain.",
+            notes: "ATAK mesh. Pick one modem preset for the whole fleet (Medium Range - Fast by default). One generated AES-256 PSK in Keychain per profile. Trackers and the gateway share the channel. The gateway Wi-Fi and MQTT passwords stay in the Keychain.",
             createdAt: now,
             updatedAt: now,
             lora: LoRaSettings(
                 usePreset: true,
-                modemPreset: .shortTurbo,
+                modemPreset: .mediumFast,
                 ignoreMQTT: false,
                 frequencySlot: 50,
                 region: region
@@ -413,7 +615,7 @@ enum BuiltInProfiles {
                 replaceDefaultPrimary: true
             ),
             device: DeviceSettings(
-                rebroadcastMode: .all,
+                rebroadcastMode: .localOnly,
                 timezone: "EST5EDT,M3.2.0/2,M11.1.0/2" // optional; standalones
             ),
             position: PositionSettings(
@@ -423,7 +625,11 @@ enum BuiltInProfiles {
                     altitudeMSL: false,
                     geoidalSeparation: true
                 ),
-                gpsMode: .enabled
+                gpsMode: .enabled,
+                smartMinimumDistance: PositionSettings.defaultSmartMinimumDistance,
+                smartMinimumIntervalSecs: PositionSettings.defaultSmartMinimumIntervalSecs,
+                broadcastSecs: PositionSettings.defaultBroadcastSecs,
+                gpsUpdateIntervalSecs: PositionSettings.defaultGPSUpdateIntervalSecs
             ),
             display: DisplaySettings(units: displayUnits),
             defaultRole: .takTracker
@@ -469,6 +675,12 @@ struct DeviceSnapshot: Sendable {
     var rebroadcastMode: RebroadcastMode?
     var smartPosition: Bool?
     var positionFlags: PositionFlagSet?
+    var smartMinimumDistance: UInt32?
+    var smartMinimumIntervalSecs: UInt32?
+    var positionBroadcastSecs: UInt32?
+    var gpsUpdateIntervalSecs: UInt32?
+    /// Indexes 1-7 whose role is not DISABLED. Nil when the secondary channels were not read back.
+    var enabledSecondaryChannelIndexes: [Int]?
     /// Meshtastic `User.long_name` read back from the radio.
     var longName: String?
     var wifiEnabled: Bool?
@@ -498,21 +710,26 @@ struct VerifyCheckResult: Identifiable, Equatable, Sendable {
 
 enum ProfileAcceptance {
     static let takChecks: [(id: String, label: String)] = [
-        ("lora.preset", "LoRa preset is ShortTurbo"),
+        ("lora.preset", "LoRa preset matches the profile"),
         ("lora.mqtt", "Ignore MQTT is off"),
-        ("lora.okToMqtt", "Ok to MQTT is on"),
+        ("lora.okToMqtt", "Ok to MQTT matches the profile for this function (default off)"),
         ("lora.hop", "Hop limit is 3"),
         ("lora.tx", "Transmit is on"),
         ("lora.slot", "Frequency slot is 50 (or profile override)"),
         ("ch.name", "Primary channel is private (not LongFast/ShortFast)"),
         ("ch.psk", "Primary PSK is non-default AES-256"),
         ("ch.precise", "Precise location is on"),
+        ("ch.onlyPrimary", "Only the primary channel is enabled (indexes 1-7 disabled)"),
         ("ch.uplink", "Primary channel uplink is on"),
         ("ch.downlink", "Primary channel downlink is on"),
         ("dev.role", "Role matches the function chosen at apply"),
         ("owner.longName", "Long name matches when a new callsign was written"),
-        ("dev.rebroadcast", "Rebroadcast is ALL"),
+        ("dev.rebroadcast", "Rebroadcast mode matches the profile"),
         ("pos.smart", "Smart Position matches profile (on for ops)"),
+        ("pos.smartDistance", "Smart Position minimum distance matches profile"),
+        ("pos.smartInterval", "Smart Position minimum interval matches profile"),
+        ("pos.broadcastSecs", "Position broadcast interval matches profile"),
+        ("pos.gpsInterval", "GPS update interval matches profile"),
         ("pos.hae", "Position flags: ALTITUDE on, ALTITUDE_MSL off"),
         ("pos.geoid", "GEOIDAL_SEPARATION on when profile requests it"),
     ]
@@ -528,9 +745,17 @@ enum ProfileAcceptance {
         mqttPassword: Data
     ) -> [VerifyCheckResult] {
         var rows = [
-            VerifyCheckResult(id: "lora.preset", label: "LoRa preset is ShortTurbo", ok: snap.modemPreset == .shortTurbo),
+            VerifyCheckResult(
+                id: "lora.preset",
+                label: "LoRa preset is \(profile.lora.modemPreset.displayName)",
+                ok: snap.modemPreset == profile.lora.modemPreset
+            ),
             VerifyCheckResult(id: "lora.mqtt", label: "Ignore MQTT is off", ok: snap.ignoreMQTT == false),
-            VerifyCheckResult(id: "lora.okToMqtt", label: "Ok to MQTT is on", ok: snap.configOkToMQTT == true),
+            VerifyCheckResult(
+                id: "lora.okToMqtt",
+                label: "Ok to MQTT is \(profile.lora.okToMQTT(for: function) ? "on" : "off")",
+                ok: snap.configOkToMQTT == profile.lora.okToMQTT(for: function)
+            ),
             VerifyCheckResult(id: "lora.hop", label: "Hop limit is 3", ok: snap.hopLimit == profile.lora.hopLimit),
             VerifyCheckResult(id: "lora.tx", label: "Transmit is on", ok: snap.txEnabled == true),
             VerifyCheckResult(id: "lora.slot", label: "Frequency slot matches profile", ok: snap.frequencySlot == profile.lora.frequencySlot),
@@ -540,6 +765,11 @@ enum ProfileAcceptance {
             }()),
             VerifyCheckResult(id: "ch.psk", label: "Primary PSK is non-default AES-256", ok: snap.primaryHasNonDefaultPSK == true),
             VerifyCheckResult(id: "ch.precise", label: "Precise location is on", ok: snap.preciseLocation == true),
+            VerifyCheckResult(
+                id: "ch.onlyPrimary",
+                label: "Only the primary channel is enabled",
+                ok: snap.enabledSecondaryChannelIndexes?.isEmpty == true
+            ),
             VerifyCheckResult(id: "ch.uplink", label: "Primary channel uplink is on", ok: snap.uplinkEnabled == true),
             VerifyCheckResult(id: "ch.downlink", label: "Primary channel downlink is on", ok: snap.downlinkEnabled == true),
             VerifyCheckResult(id: "dev.role", label: "Role matches apply choice", ok: snap.role == appliedRole),
@@ -550,8 +780,32 @@ enum ProfileAcceptance {
                     : "Long name matches the TAK callsign",
                 ok: appliedLongName == nil || snap.longName == appliedLongName
             ),
-            VerifyCheckResult(id: "dev.rebroadcast", label: "Rebroadcast is ALL", ok: snap.rebroadcastMode == .all),
+            VerifyCheckResult(
+                id: "dev.rebroadcast",
+                label: "Rebroadcast mode is \(profile.device.rebroadcastMode.rawValue)",
+                ok: snap.rebroadcastMode == profile.device.rebroadcastMode
+            ),
             VerifyCheckResult(id: "pos.smart", label: "Smart Position matches profile", ok: snap.smartPosition == profile.position.smartPosition),
+            VerifyCheckResult(
+                id: "pos.smartDistance",
+                label: "Smart Position minimum distance is \(profile.position.smartMinimumDistance) m",
+                ok: snap.smartMinimumDistance == profile.position.smartMinimumDistance
+            ),
+            VerifyCheckResult(
+                id: "pos.smartInterval",
+                label: "Smart Position minimum interval is \(profile.position.smartMinimumIntervalSecs) s",
+                ok: snap.smartMinimumIntervalSecs == profile.position.smartMinimumIntervalSecs
+            ),
+            VerifyCheckResult(
+                id: "pos.broadcastSecs",
+                label: "Position broadcast interval is \(profile.position.broadcastSecs) s",
+                ok: snap.positionBroadcastSecs == profile.position.broadcastSecs
+            ),
+            VerifyCheckResult(
+                id: "pos.gpsInterval",
+                label: "GPS update interval is \(profile.position.gpsUpdateIntervalSecs) s",
+                ok: snap.gpsUpdateIntervalSecs == profile.position.gpsUpdateIntervalSecs
+            ),
             VerifyCheckResult(id: "pos.hae", label: "Altitude is HAE path (not MSL)", ok: snap.positionFlags?.isTAKAltitudeCorrect == true),
             VerifyCheckResult(id: "pos.geoid", label: "Geoidal separation matches profile", ok: snap.positionFlags?.geoidalSeparation == profile.position.flags.geoidalSeparation),
         ]

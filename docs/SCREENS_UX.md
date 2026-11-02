@@ -21,7 +21,7 @@ Apply is the primary path in the field. Profiles is for prep.
 
 | Element | Behavior |
 | --- | --- |
-| Row | Name, subtitle “ShortTurbo · slot 50 · TAK Tracker default”, trailing chevron |
+| Row | Name, subtitle “Medium Range - Fast · slot 50 · TAK Tracker default”, trailing chevron |
 | Swipe | Duplicate; Delete (also deletes Keychain PSK for that profile id) |
 | FAB / toolbar + | New profile (starts as copy of TAK defaults) |
 | Empty | “Create TAK Tracker profile” primary button → `BuiltInProfiles.takTracker()` + `ensurePSK` |
@@ -39,14 +39,14 @@ Sections matching the model: LoRa, Channel, Device defaults, Position, Display, 
 | Name | Text |
 | Channel name | Text (warn if LongFast/ShortFast) |
 | PSK | Status only: “Key in Keychain” / “Will generate on save”. Buttons: **Generate if missing**, **Rotate** (confirm: “All radios need re-apply”) |
-| LoRa preset | Locked ShortTurbo on TAK template (advanced unlock later) |
+| LoRa preset | Picker of all Meshtastic presets (default Medium Range - Fast); same on every radio |
 | Slot | Stepper/number, default 50 |
 | Ignore MQTT | Locked Off |
-| Ok to MQTT | Locked On |
+| Ok to MQTT | Two toggles, Trackers and Gateway, both default Off (gateway On broke iTAK delivery in field testing) |
 | Hop limit | Locked 3 |
 | Transmit | Locked On |
-| Default role | Segmented: TAK Tracker \| TAK |
-| Rebroadcast | ALL (locked; CORE_PORTNUMS_ONLY drops ATAK chat) |
+| Default role | Segmented: TAK Tracker \| TAK \| Client Base \| Router |
+| Rebroadcast mode | Picker: Local only (recommended, default for new profiles) \| All \| Known only, with help text. Applies to every radio and role. Saved profiles without the field load as ALL. CORE_PORTNUMS_ONLY (drops ATAK chat) and NONE are not offered. The profile list summary shows the mode. |
 | Smart Position | Toggle |
 | Altitude | Show “HAE (ALTITUDE)” read-only correct; no MSL toggle on TAK template |
 | Units | Imperial / Metric |
@@ -81,6 +81,8 @@ Sections matching the model: LoRa, Channel, Device defaults, Position, Display, 
 3. **Role for this device** — shown for a tracker only. Required segmented control:
    - **TAK Tracker** — standalone
    - **TAK** — this phone will run ATAK/iTAK + Local TAK Server
+   - **Client Base** — recommended rooftop relay (Meshtastic `CLIENT_BASE`, protobuf 12). Relays packets to/from favorited nodes; favorite the trackers and gateway in the Meshtastic app (Mesh Config does not manage favorites). No Wi-Fi, MQTT off, same fleet LoRa/channel/PSK
+   - **Router** — tower/mountaintop relay only (Meshtastic `ROUTER`, protobuf 2). No Wi-Fi, MQTT off, same fleet LoRa/channel/PSK
 4. Short help under role (from `DeviceRole.shortHelp`)
 5. **Name on TAK** — optional **long name** (the Meshtastic name ATAK shows as this radio’s callsign) and optional **short name** (the 4-byte mesh badge). Blank means leave that field alone. Both blank sends no name change. A roster row, Re-apply, or a scan hit that matches a roster peripheral fills the last synced names. Those fills are not edits. After connect, names read from the radio replace an unedited prefill.
 6. Primary: **Scan for radios**
@@ -133,7 +135,7 @@ Footer: Cancel → disconnect, mark failed “cancelled”, return to setup.
 | Rule | Why |
 | --- | --- |
 | Function asked every device | Tracker vs gateway is a different radio job |
-| Role asked every tracker | Stops TAK vs TAK_TRACKER mix-ups |
+| Role asked every tracker | Stops TAK vs TAK_TRACKER vs CLIENT_BASE vs ROUTER mix-ups |
 | Long name is per device, and optional | TAK callsign is per radio. Blank leaves the radio’s name alone. |
 | Next device never auto-connects | Wrong board risk |
 | One session at a time | BLE constraint |
@@ -196,7 +198,7 @@ A failed attempt does not replace a long name that already verified.
 
 ### Device detail
 - Function picker (Tracker / Gateway). Gateway forces role CLIENT and can pick a saved Wi-Fi network when the profile has more than one. Changing function sets Needs re-apply and does not write Bluetooth.
-- Role picker (TAK Tracker / TAK) for a tracker — changing sets `roleChangedNeedsReapply`
+- Role picker (TAK Tracker / TAK / Client Base / Router) for a tracker — changing sets `roleChangedNeedsReapply`
 - Profile (read-only link, or switch profile with confirm)
 - **Re-apply now** → Apply flow prefilled with this device’s profile, role, and last applied names; prefer reconnect by peripheralID. The names can still be edited before scan.
 - Notes field

@@ -16,18 +16,26 @@ struct ProfileEditorView: View {
                     .textInputAutocapitalization(.words)
             }
             Section("LoRa") {
-                LabeledContent("Preset", value: profile.lora.modemPreset.displayName)
-                Text("ShortTurbo is locked for the TAK template.")
+                Picker("Preset", selection: $profile.lora.modemPreset) {
+                    ForEach(ModemPreset.pickerChoices(current: profile.lora.modemPreset), id: \.self) { preset in
+                        Text(preset.displayName).tag(preset)
+                    }
+                }
+                Text("Every radio in this fleet must use the same preset. Changing it means re-applying every radio.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Stepper(value: $profile.lora.frequencySlot, in: UInt32(1)...UInt32(100)) {
                     Text("Frequency slot \(profile.lora.frequencySlot)")
                 }
                 LabeledContent("Ignore MQTT", value: "Off")
-                LabeledContent("Ok to MQTT", value: "On")
                 LabeledContent("Hop limit", value: "3")
                 LabeledContent("Transmit", value: "On")
-                Text("These are locked so every radio, including trackers, can be uploaded by the gateway.")
+                Text("Ignore MQTT is locked off so trackers receive iTAK/OTS messages the gateway relays over LoRa.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Toggle("Ok to MQTT (trackers)", isOn: $profile.lora.configOkToMQTT)
+                Toggle("Ok to MQTT (gateway)", isOn: $profile.lora.gatewayConfigOkToMQTT)
+                Text("Sets the ok_to_mqtt bit on outgoing packets. Default off: in field testing the gateway with Ok to MQTT on broke iTAK delivery.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Picker("Region", selection: $profile.lora.region) {
@@ -65,14 +73,44 @@ struct ProfileEditorView: View {
                 Picker("Default role", selection: $profile.defaultRole) {
                     Text(DeviceRole.takTracker.displayName).tag(DeviceRole.takTracker)
                     Text(DeviceRole.tak.displayName).tag(DeviceRole.tak)
+                    Text(DeviceRole.clientBase.displayName).tag(DeviceRole.clientBase)
+                    Text(DeviceRole.router.displayName).tag(DeviceRole.router)
                 }
-                LabeledContent("Rebroadcast", value: "ALL")
+                Picker("Rebroadcast mode", selection: $profile.device.rebroadcastMode) {
+                    ForEach(RebroadcastMode.fleetChoices, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                Text(profile.device.rebroadcastMode.shortHelp + " Applied to every radio in this fleet, every role.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 TextField("Time zone (optional POSIX TZ)", text: timezoneText)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
             }
             Section("Position") {
                 Toggle("Smart Position", isOn: $profile.position.smartPosition)
+                Stepper(value: $profile.position.smartMinimumDistance, in: UInt32(0)...UInt32(10_000), step: 5) {
+                    Text("Smart minimum distance \(profile.position.smartMinimumDistance) m")
+                }
+                .disabled(!profile.position.smartPosition)
+                Stepper(value: $profile.position.smartMinimumIntervalSecs, in: UInt32(0)...UInt32(86_400), step: 5) {
+                    Text("Smart minimum interval \(profile.position.smartMinimumIntervalSecs) s")
+                }
+                .disabled(!profile.position.smartPosition)
+                Stepper(value: $profile.position.broadcastSecs, in: UInt32(0)...UInt32(86_400), step: 15) {
+                    Text("Broadcast interval \(profile.position.broadcastSecs) s")
+                }
+                Stepper(
+                    value: $profile.position.gpsUpdateIntervalSecs,
+                    in: PositionSettings.minimumGPSUpdateIntervalSecs...UInt32(86_400),
+                    step: 30
+                ) {
+                    Text("GPS update interval \(profile.position.gpsUpdateIntervalSecs) s")
+                }
+                Text("Written in the one position config write. For distance and broadcast intervals, 0 lets the firmware use its own default. GPS update interval is at least 30 s.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 LabeledContent("Altitude", value: "HAE (ALTITUDE, not MSL)")
                 Toggle("Geoidal separation", isOn: $profile.position.flags.geoidalSeparation)
                 LabeledContent("GPS", value: profile.position.gpsMode.rawValue)
@@ -84,9 +122,11 @@ struct ProfileEditorView: View {
                 }
             }
             Section("Server / MQTT") {
-                TextField("MQTT address", text: $profile.mqtt.address)
+                TextField("MQTT host", text: $profile.mqtt.host)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                TextField("Port", text: mqttPortText, prompt: Text(String(MQTTSettings.defaultPort)))
+                    .keyboardType(.numberPad)
                 TextField("Username", text: $profile.mqtt.username)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -171,6 +211,17 @@ struct ProfileEditorView: View {
 
     private var regionChoices: [LoRaRegion] {
         LoRaRegion.allCases.filter { $0 != .unset || profile.lora.region == .unset }
+    }
+
+    /// Meshtastic stores the port inside `address` as host:port. Blank leaves no port (firmware default).
+    private var mqttPortText: Binding<String> {
+        Binding(
+            get: { profile.mqtt.port.map(String.init) ?? "" },
+            set: { text in
+                let digits = text.filter(\.isNumber)
+                profile.mqtt.port = digits.isEmpty ? nil : UInt16(digits)
+            }
+        )
     }
 
     private var timezoneText: Binding<String> {

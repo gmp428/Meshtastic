@@ -99,7 +99,7 @@ final class DeviceRosterStore: ObservableObject {
         devices[index].function = function
         devices[index].wifiNetworkID = wifiNetworkID
         if function == .gateway {
-            devices[index].role = .client
+            devices[index].role = DeviceRole.gatewayRole(devices[index].role)
         } else if devices[index].role == .client {
             devices[index].role = .takTracker
         }

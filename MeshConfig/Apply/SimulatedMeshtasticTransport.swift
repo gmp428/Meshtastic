@@ -126,7 +126,11 @@ final class SimulatedMeshtasticTransport: FleetRadioTransport {
             settings: PositionSettings(
                 smartPosition: false,
                 flags: PositionFlagSet(altitude: false, altitudeMSL: true, geoidalSeparation: false),
-                gpsMode: .enabled
+                gpsMode: .enabled,
+                smartMinimumDistance: 100,
+                smartMinimumIntervalSecs: 30,
+                broadcastSecs: 900,
+                gpsUpdateIntervalSecs: 120
             )
         )
         let display = try! PhoneAPICodec.displayConfig(
@@ -143,6 +147,14 @@ final class SimulatedMeshtasticTransport: FleetRadioTransport {
             preciseLocation: false,
             channelID: 0x01020304
         )
+        // A leftover SECONDARY channel at index 1 so the simulator shows the removal row. No PSK.
+        let leftoverSecondary = PhoneAPICodec.serialize([
+            PhoneAPICodec.Field(number: 1, value: .varint(1)),
+            PhoneAPICodec.Field(number: 2, value: .bytes(PhoneAPICodec.serialize([
+                PhoneAPICodec.Field(number: 3, value: .bytes(Data("MCSC".utf8))),
+            ]))),
+            PhoneAPICodec.Field(number: 3, value: .varint(2)),
+        ])
         let mqtt = try! PhoneAPICodec.mqttConfig(
             merging: Data(),
             enabled: true,
@@ -160,7 +172,7 @@ final class SimulatedMeshtasticTransport: FleetRadioTransport {
             owner: owner,
             longName: "SimRadio",
             shortName: "Sim",
-            channels: [channel],
+            channels: [channel, leftoverSecondary],
             observedConfigFields: [1, 2, 3, 4, 5, 6, 7, 8],
             observedModuleFields: [1],
             mqtt: mqtt

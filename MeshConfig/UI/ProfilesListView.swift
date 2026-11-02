@@ -13,7 +13,7 @@ struct ProfilesListView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(profile.name)
                                 .font(.headline)
-                            Text("\(profile.lora.modemPreset.displayName) · slot \(profile.lora.frequencySlot) · \(profile.defaultRole.chipTitle)")
+                            Text("\(profile.lora.modemPreset.displayName) · slot \(profile.lora.frequencySlot) · \(profile.defaultRole.chipTitle) · \(profile.device.rebroadcastMode.chipTitle)")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }

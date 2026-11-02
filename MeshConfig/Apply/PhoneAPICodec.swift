@@ -286,7 +286,12 @@ enum PhoneAPICodec {
 
     static func positionConfig(merging existing: Data, settings: PositionSettings) throws -> Data {
         var fields = try parse(existing)
+        // One position set_config carries every position field. Field numbers from protobufs ad0bf31.
+        upsertVarint(&fields, 1, UInt64(settings.broadcastSecs))
         upsertVarint(&fields, 2, settings.smartPosition ? 1 : 0)
+        upsertVarint(&fields, 5, UInt64(settings.gpsUpdateIntervalSecs))
+        upsertVarint(&fields, 10, UInt64(settings.smartMinimumDistance))
+        upsertVarint(&fields, 11, UInt64(settings.smartMinimumIntervalSecs))
         var flags = UInt32(truncatingIfNeeded: numeric(fields, 7))
         setBit(&flags, altitudeBit, settings.flags.altitude)
         setBit(&flags, altitudeMSLBit, settings.flags.altitudeMSL)
@@ -463,8 +468,26 @@ enum PhoneAPICodec {
             channel: try parsedChannel(raw),
             owner: inventory.owner,
             network: inventory.network,
-            mqtt: inventory.mqtt
+            mqtt: inventory.mqtt,
+            secondaryChannels: try inventory.channels.map { try parsedChannel($0) }
         )
+    }
+
+    /// `Channel` for admin `set_channel` (admin.proto field 33) that turns off one secondary slot.
+    /// channel.proto: index = 1, role = 3 (DISABLED = 0). No settings, so the slot keeps no name or PSK.
+    static func disabledChannel(index: Int) -> Data {
+        var fields: [Field] = []
+        upsertVarint(&fields, 1, UInt64(index), force: true)
+        upsertVarint(&fields, 3, 0, force: true)
+        return serialize(fields)
+    }
+
+    /// Index, role, and name of each channel. Never exposes the PSK.
+    static func channelSummaries(_ channels: [Data]) throws -> [(index: Int, role: Int, name: String?)] {
+        try channels.map { raw in
+            let parsed = try parsedChannel(raw)
+            return (parsed.index, parsed.role, parsed.name)
+        }
     }
 
     static func snapshot(
@@ -474,7 +497,8 @@ enum PhoneAPICodec {
         channel: ParsedChannel,
         owner: Data,
         network: Data = Data(),
-        mqtt: Data = Data()
+        mqtt: Data = Data(),
+        secondaryChannels: [ParsedChannel]? = nil
     ) throws -> DeviceSnapshot {
         let loraFields = try parse(lora)
         let deviceFields = try parse(device)
@@ -508,6 +532,13 @@ enum PhoneAPICodec {
             rebroadcastMode: rebroadcast,
             smartPosition: numeric(positionFields, 2) != 0,
             positionFlags: flags,
+            smartMinimumDistance: UInt32(truncatingIfNeeded: numeric(positionFields, 10)),
+            smartMinimumIntervalSecs: UInt32(truncatingIfNeeded: numeric(positionFields, 11)),
+            positionBroadcastSecs: UInt32(truncatingIfNeeded: numeric(positionFields, 1)),
+            gpsUpdateIntervalSecs: UInt32(truncatingIfNeeded: numeric(positionFields, 5)),
+            enabledSecondaryChannelIndexes: secondaryChannels.map { channels in
+                channels.filter { (1...7).contains($0.index) && $0.role != 0 }.map(\.index).sorted()
+            },
             longName: try longName(from: owner),
             wifiEnabled: numeric(networkFields, 1) != 0,
             wifiSSID: textValue(networkFields, 3),
@@ -572,7 +603,8 @@ enum PhoneAPICodec {
             modemPreset: .shortTurbo,
             ignoreMQTT: false,
             frequencySlot: 50,
-            region: .us
+            region: .us,
+            configOkToMQTT: true
         )
         guard try encodeMatches(
             "0801100818fa012007280838014003480150165832c80601",
@@ -599,7 +631,7 @@ enum PhoneAPICodec {
             gpsMode: .enabled
         )
         guard try encodeMatches(
-            "088407100138056801",
+            "083c1001281e3805500a580f6801",
             positionConfig(merging: positionBase, settings: position)
         ) else { return false }
 
@@ -894,19 +926,47 @@ enum PhoneAPICodec {
         return nil
     }
 
-    private static func modemPresetValue(_ preset: ModemPreset) -> UInt64 {
+    /// `Config.LoRaConfig.ModemPreset` values from protobufs ad0bf31.
+    static func modemPresetValue(_ preset: ModemPreset) -> UInt64 {
         switch preset {
         case .longFast: return 0
+        case .longSlow: return 1
+        case .mediumSlow: return 3
         case .mediumFast: return 4
+        case .shortSlow: return 5
+        case .shortFast: return 6
+        case .longModerate: return 7
         case .shortTurbo: return 8
+        case .longTurbo: return 9
+        case .liteFast: return 10
+        case .liteSlow: return 11
+        case .narrowFast: return 12
+        case .narrowSlow: return 13
+        case .tinyFast: return 14
+        case .tinySlow: return 15
+        case .mediumTurbo: return 16
         }
     }
 
-    private static func modemPreset(_ value: UInt64) -> ModemPreset? {
+    /// VERY_LONG_SLOW (2) and unknown values decode as nil, so Verify fails instead of guessing.
+    static func modemPreset(_ value: UInt64) -> ModemPreset? {
         switch value {
         case 0: return .longFast
+        case 1: return .longSlow
+        case 3: return .mediumSlow
         case 4: return .mediumFast
+        case 5: return .shortSlow
+        case 6: return .shortFast
+        case 7: return .longModerate
         case 8: return .shortTurbo
+        case 9: return .longTurbo
+        case 10: return .liteFast
+        case 11: return .liteSlow
+        case 12: return .narrowFast
+        case 13: return .narrowSlow
+        case 14: return .tinyFast
+        case 15: return .tinySlow
+        case 16: return .mediumTurbo
         default: return nil
         }
     }
@@ -922,6 +982,7 @@ enum PhoneAPICodec {
     private static func roleValue(_ role: DeviceRole) -> UInt64 {
         switch role {
         case .client: return 0
+        case .router: return 2
         case .tak: return 7
         case .takTracker: return 10
         case .clientBase: return 12
@@ -931,6 +992,7 @@ enum PhoneAPICodec {
     private static func deviceRole(_ value: UInt64) -> DeviceRole? {
         switch value {
         case 0: return .client
+        case 2: return .router
         case 7: return .tak
         case 10: return .takTracker
         case 12: return .clientBase
@@ -942,6 +1004,7 @@ enum PhoneAPICodec {
         switch mode {
         case .all: return 0
         case .localOnly: return 2
+        case .knownOnly: return 3
         case .none: return 4
         }
     }
@@ -950,6 +1013,7 @@ enum PhoneAPICodec {
         switch value {
         case 0: return .all
         case 2: return .localOnly
+        case 3: return .knownOnly
         case 4: return RebroadcastMode.none
         default: return nil
         }

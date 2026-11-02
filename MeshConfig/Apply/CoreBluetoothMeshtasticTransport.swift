@@ -283,6 +283,16 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         let device = try await fetchConfig(.device)
         let position = try await fetchConfig(.position)
         let channel = try await fetchChannel()
+        // Read back slots 1-7 so Verify can confirm only the primary is enabled.
+        // A slot the radio does not return leaves the list nil, which fails that check.
+        var secondary: [PhoneAPICodec.ParsedChannel]? = []
+        for index in 1...7 {
+            guard let slot = try? await fetchChannel(index: index) else {
+                secondary = nil
+                break
+            }
+            secondary?.append(slot)
+        }
         let owner = try await fetchOwner()
         let network = try await fetchConfig(.network)
         let mqtt = try await fetchMQTT()
@@ -293,7 +303,8 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
             channel: channel,
             owner: owner,
             network: network,
-            mqtt: mqtt
+            mqtt: mqtt,
+            secondaryChannels: secondary
         )
     }
 
@@ -422,8 +433,8 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
         return owner
     }
 
-    private func fetchChannel() async throws -> PhoneAPICodec.ParsedChannel {
-        let admin = PhoneAPICodec.getChannelAdmin(index: 0, passkey: sessionPasskey)
+    private func fetchChannel(index: Int = 0) async throws -> PhoneAPICodec.ParsedChannel {
+        let admin = PhoneAPICodec.getChannelAdmin(index: index, passkey: sessionPasskey)
         guard let message = try await roundTrip(
             admin: admin,
             wantResponse: true,
@@ -431,7 +442,9 @@ final class CoreBluetoothMeshtasticTransport: NSObject, FleetRadioTransport {
             linkDropSucceeds: false
         ),
               let channel = message.channel else {
-            throw MeshtasticBLEError.adminFailed("The radio did not return the primary channel.")
+            throw MeshtasticBLEError.adminFailed(
+                index == 0 ? "The radio did not return the primary channel." : "The radio did not return channel \(index)."
+            )
         }
         return channel
     }

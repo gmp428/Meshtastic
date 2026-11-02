@@ -91,7 +91,18 @@ struct RadioInventory: Equatable, Sendable {
             case .moduleMQTT(let body):
                 copy.mqtt = body
             case .channel(let raw):
-                if let index = copy.channels.firstIndex(where: { channel in
+                let written = try PhoneAPICodec.parse(raw)
+                if PhoneAPICodec.numeric(written, 3) != 1 {
+                    // Secondary-slot write (DISABLED). Replace the slot with the same index.
+                    let slot = PhoneAPICodec.numeric(written, 1)
+                    if let index = copy.channels.firstIndex(where: { channel in
+                        (try? PhoneAPICodec.numeric(PhoneAPICodec.parse(channel), 1)) == slot
+                    }) {
+                        copy.channels[index] = raw
+                    } else {
+                        copy.channels.append(raw)
+                    }
+                } else if let index = copy.channels.firstIndex(where: { channel in
                     (try? PhoneAPICodec.primaryChannel(in: [channel])) != nil
                 }) {
                     copy.channels[index] = raw
@@ -173,6 +184,9 @@ enum SyncDiff {
         }
 
         let loraFields = try PhoneAPICodec.parse(inventory.lora)
+        // Ok to MQTT is chosen per function (tracker vs gateway); everything else is the fleet value.
+        var lora = profile.lora
+        lora.configOkToMQTT = profile.lora.okToMQTT(for: function)
         var loraChanges: [SyncChange] = []
         noteBool(&loraChanges, id: "lora.usePreset", title: "LoRa use preset", field: 1, fields: loraFields, desired: profile.lora.usePreset)
         noteExact(
@@ -209,10 +223,10 @@ enum SyncDiff {
         )
         noteBool(&loraChanges, id: "lora.tx", title: "Transmit", field: 9, fields: loraFields, desired: profile.lora.txEnabled)
         noteBool(&loraChanges, id: "lora.ignoreMQTT", title: "Ignore MQTT", field: 104, fields: loraFields, desired: profile.lora.ignoreMQTT)
-        noteBool(&loraChanges, id: "lora.config_ok_to_mqtt", title: "Ok to MQTT", field: 105, fields: loraFields, desired: profile.lora.configOkToMQTT)
+        noteBool(&loraChanges, id: "lora.config_ok_to_mqtt", title: "Ok to MQTT", field: 105, fields: loraFields, desired: lora.configOkToMQTT)
         if !loraChanges.isEmpty {
             changes.append(contentsOf: loraChanges)
-            writes.append(.config(.lora, try PhoneAPICodec.loraConfig(merging: inventory.lora, settings: profile.lora)))
+            writes.append(.config(.lora, try PhoneAPICodec.loraConfig(merging: inventory.lora, settings: lora)))
         }
 
         let deviceFields = try PhoneAPICodec.parse(inventory.device)
@@ -227,8 +241,8 @@ enum SyncDiff {
         )
         noteExact(
             &deviceChanges,
-            id: "device.rebroadcast",
-            title: "Rebroadcast",
+            id: "device.rebroadcast_mode",
+            title: "Rebroadcast mode",
             radio: PhoneAPICodec.numeric(deviceFields, 6),
             desired: rebroadcastValue(profile.device.rebroadcastMode),
             label: rebroadcastLabel
@@ -262,6 +276,38 @@ enum SyncDiff {
             field: 2,
             fields: positionFields,
             desired: profile.position.smartPosition
+        )
+        noteExact(
+            &positionChanges,
+            id: "position.broadcastSecs",
+            title: "Position broadcast interval",
+            radio: PhoneAPICodec.numeric(positionFields, 1),
+            desired: UInt64(profile.position.broadcastSecs),
+            label: { "\($0) s" }
+        )
+        noteExact(
+            &positionChanges,
+            id: "position.gpsInterval",
+            title: "GPS update interval",
+            radio: PhoneAPICodec.numeric(positionFields, 5),
+            desired: UInt64(profile.position.gpsUpdateIntervalSecs),
+            label: { "\($0) s" }
+        )
+        noteExact(
+            &positionChanges,
+            id: "position.smartDistance",
+            title: "Smart position minimum distance",
+            radio: PhoneAPICodec.numeric(positionFields, 10),
+            desired: UInt64(profile.position.smartMinimumDistance),
+            label: { "\($0) m" }
+        )
+        noteExact(
+            &positionChanges,
+            id: "position.smartInterval",
+            title: "Smart position minimum interval",
+            radio: PhoneAPICodec.numeric(positionFields, 11),
+            desired: UInt64(profile.position.smartMinimumIntervalSecs),
+            label: { "\($0) s" }
         )
         let flags = UInt32(truncatingIfNeeded: PhoneAPICodec.numeric(positionFields, 7))
         noteBit(&positionChanges, id: "position.altitude", title: "Altitude", flags: flags, bit: PhoneAPICodec.altitudeBit, desired: profile.position.flags.altitude)
@@ -342,6 +388,19 @@ enum SyncDiff {
             } catch PhoneAPICodec.CodecError.channelNameTooLong {
                 throw SyncError.channelName
             }
+        }
+
+        // The fleet uses only the primary channel. Any secondary slot (index 1-7, role SECONDARY = 2)
+        // left on the radio is turned off with set_channel role DISABLED. Nothing is written when none are on.
+        for summary in try PhoneAPICodec.channelSummaries(inventory.channels)
+        where (1...7).contains(summary.index) && summary.role == 2 {
+            let name = (summary.name?.isEmpty == false) ? summary.name! : "unnamed"
+            changes.append(SyncChange(
+                id: "channel.secondary.\(summary.index)",
+                title: "Secondary channel \(summary.index)",
+                detail: "Remove secondary channel \"\(name)\" (index \(summary.index))"
+            ))
+            writes.append(.channel(PhoneAPICodec.disabledChannel(index: summary.index)))
         }
 
         let mqttFields = try PhoneAPICodec.parse(inventory.mqtt)
@@ -498,6 +557,7 @@ enum SyncDiff {
     private static func roleValue(_ role: DeviceRole) -> UInt64 {
         switch role {
         case .client: return 0
+        case .router: return 2
         case .tak: return 7
         case .takTracker: return 10
         case .clientBase: return 12
@@ -507,6 +567,7 @@ enum SyncDiff {
     private static func roleLabel(_ value: UInt64) -> String {
         switch value {
         case 0: return "CLIENT"
+        case 2: return "ROUTER"
         case 7: return "TAK"
         case 10: return "TAK_TRACKER"
         case 12: return "CLIENT_BASE"
@@ -518,6 +579,7 @@ enum SyncDiff {
         switch mode {
         case .all: return 0
         case .localOnly: return 2
+        case .knownOnly: return 3
         case .none: return 4
         }
     }
@@ -535,21 +597,12 @@ enum SyncDiff {
     }
 
     private static func modemValue(_ preset: ModemPreset) -> UInt64 {
-        switch preset {
-        case .longFast: return 0
-        case .mediumFast: return 4
-        case .shortTurbo: return 8
-        }
+        PhoneAPICodec.modemPresetValue(preset)
     }
 
     private static func modemLabel(_ value: UInt64) -> String {
-        switch value {
-        case 0: return "LONG_FAST"
-        case 4: return "MEDIUM_FAST"
-        case 6: return "SHORT_FAST"
-        case 8: return "SHORT_TURBO"
-        default: return String(value)
-        }
+        if value == 2 { return "VERY_LONG_SLOW" }
+        return PhoneAPICodec.modemPreset(value)?.rawValue ?? String(value)
     }
 
     private static func regionValue(_ region: LoRaRegion) -> UInt64 {
@@ -601,13 +654,20 @@ enum SyncDiff {
     /// shuffled fields, explicit zeros, fixed32 where we emit varints, and unsorted channel settings.
     /// A byte compare of those bodies is dirty. The field diff must be exactly `device.role`.
     private static func runSelfCheck() throws -> String? {
-        let profile = BuiltInProfiles.takTracker()
+        // These fixtures are radios at rebroadcast ALL (proto3 0). New profiles default to LOCAL_ONLY,
+        // so pin ALL here and cover the LOCAL_ONLY diff in `rebroadcastModeCheck`.
+        var profile = BuiltInProfiles.takTracker()
+        guard profile.device.rebroadcastMode == .localOnly else { return "rebroadcast-default" }
+        profile.device.rebroadcastMode = .all
+        // New profiles default to MEDIUM_FAST. This fixture radio is on SHORT_TURBO (8), so pin that here.
+        guard profile.lora.modemPreset == .mediumFast else { return "preset-default" }
+        profile.lora.modemPreset = .shortTurbo
         // 0x5A repeated is an encoder fixture, not a fleet key. Do not print it.
         let psk = Data(repeating: 0x5A, count: 32)
         let zone = Data((profile.device.timezone ?? "").utf8)
         let noisy = RadioInventory(
             lora: RawProto.message([
-                (105, .varint(1)),
+                (105, .varint(0)),
                 (11, .varint(50)),
                 (8, .varint(3)),
                 (7, .fixed32(1)),
@@ -624,8 +684,11 @@ enum SyncDiff {
                 (1, .varint(10)),
             ]),
             position: RawProto.message([
-                (1, .varint(900)),
+                (1, .varint(60)),
+                (11, .varint(15)),
+                (5, .varint(30)),
                 (13, .varint(1)),
+                (10, .varint(10)),
                 (7, .fixed32(5)),
                 (4, .varint(0)),
                 (2, .varint(1)),
@@ -767,6 +830,361 @@ enum SyncDiff {
         if let problem = try trackerMQTTCheck(profile: profile, psk: psk) { return problem }
         if let problem = try rebroadcastCheck(profile: profile, psk: psk) { return problem }
         if let problem = try gatewayCheck(profile: profile, psk: psk) { return problem }
+        if let problem = try rebroadcastModeCheck(psk: psk) { return problem }
+        if let problem = try secondaryChannelCheck(psk: psk) { return problem }
+        if let problem = try fieldTestCheck(psk: psk) { return problem }
+        if let problem = try relayCheck(profile: profile, psk: psk, role: .router, wire: 2, label: "ROUTER", tag: "router") {
+            return problem
+        }
+        if let problem = try relayCheck(profile: profile, psk: psk, role: .clientBase, wire: 12, label: "CLIENT_BASE", tag: "client-base") {
+            return problem
+        }
+        return nil
+    }
+
+    /// Field-test settings (Nov 2026): a tracker at smart distance 20 m with Ok to MQTT on and Ignore MQTT on
+    /// is pulled back to 10 m / off / off in one LoRa and one position write. Ok to MQTT follows the function.
+    private static func fieldTestCheck(psk: Data) throws -> String? {
+        let profile = BuiltInProfiles.takTracker()
+        guard profile.lora.modemPreset == .mediumFast,
+              !profile.lora.ignoreMQTT,
+              !profile.lora.configOkToMQTT, !profile.lora.gatewayConfigOkToMQTT,
+              profile.position.smartPosition,
+              profile.position.smartMinimumDistance == 10,
+              profile.position.smartMinimumIntervalSecs == 15,
+              profile.position.broadcastSecs == 60,
+              profile.position.gpsUpdateIntervalSecs == 30,
+              profile.device.rebroadcastMode == .localOnly,
+              profile.channel.uplinkEnabled, profile.channel.downlinkEnabled,
+              profile.mqtt.root == "opentakserver",
+              profile.mqtt.port == 8883,
+              profile.mqtt.host == "mcsctak.duckdns.org" else { return "field-defaults" }
+        var mqtt = profile.mqtt
+        mqtt.port = 1883
+        guard mqtt.address == "mcsctak.duckdns.org:1883" else { return "field-port" }
+        mqtt.port = nil
+        guard mqtt.address == "mcsctak.duckdns.org" else { return "field-port-clear" }
+        guard DeviceRole.gatewayRole(nil) == .client, DeviceRole.gatewayRole(.clientBase) == .clientBase,
+              DeviceRole.gatewayRole(.takTracker) == .client else { return "field-gateway-role" }
+
+        var radioLora = profile.lora
+        radioLora.ignoreMQTT = true
+        radioLora.configOkToMQTT = true
+        var radioPosition = profile.position
+        radioPosition.smartMinimumDistance = 20
+        let radio = RadioInventory(
+            lora: try PhoneAPICodec.loraConfig(merging: Data(), settings: radioLora),
+            device: try PhoneAPICodec.deviceConfig(merging: Data(), role: .takTracker, settings: profile.device),
+            position: try PhoneAPICodec.positionConfig(merging: Data(), settings: radioPosition),
+            display: try PhoneAPICodec.displayConfig(merging: Data(), settings: profile.display),
+            owner: try PhoneAPICodec.userMessage(merging: Data(), longName: "Tracker", shortName: "Trk"),
+            longName: "Tracker",
+            shortName: "Trk",
+            channels: [try PhoneAPICodec.channelMessage(
+                name: profile.channel.name,
+                psk: psk,
+                uplink: true,
+                downlink: true,
+                preciseLocation: true,
+                channelID: 0x11223344
+            )],
+            observedConfigFields: [1, 2, 5, 6],
+            observedModuleFields: []
+        )
+        let plan = try SyncDiff.plan(
+            inventory: radio,
+            profile: profile,
+            role: .takTracker,
+            names: RadioNames(longName: nil, shortName: nil),
+            longEdited: false,
+            shortEdited: false,
+            psk: psk,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
+        )
+        guard plan.changes.map(\.id) == ["lora.ignoreMQTT", "lora.config_ok_to_mqtt", "position.smartDistance"] else {
+            return "field-ids"
+        }
+        guard plan.changes.last?.detail == "20 m → 10 m" else { return "field-distance" }
+        guard plan.writes.count == 2 else { return "field-writes" }
+        let updated = try radio.applying(plan.writes)
+        let snap = try PhoneAPICodec.snapshot(inventory: updated)
+        guard snap.ignoreMQTT == false, snap.configOkToMQTT == false, snap.smartMinimumDistance == 10 else {
+            return "field-readback"
+        }
+        let rows = ProfileAcceptance.evaluate(
+            profile: profile,
+            snap: snap,
+            appliedRole: .takTracker,
+            appliedLongName: nil,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
+        )
+        for id in ["lora.preset", "lora.mqtt", "lora.okToMqtt", "pos.smart", "pos.smartDistance", "pos.smartInterval",
+                   "pos.broadcastSecs", "pos.gpsInterval", "dev.rebroadcast", "ch.onlyPrimary", "ch.uplink", "ch.downlink"] {
+            guard rows.first(where: { $0.id == id })?.ok == true else { return "field-verify-\(id)" }
+        }
+        var gatewayOn = profile
+        gatewayOn.lora.gatewayConfigOkToMQTT = true
+        guard gatewayOn.lora.okToMQTT(for: .gateway), !gatewayOn.lora.okToMQTT(for: .tracker) else { return "field-ok-function" }
+        return nil
+    }
+
+    /// A radio that matches the profile but has SECONDARY channels at 1 and 3 (and a DISABLED slot 2)
+    /// gets exactly one DISABLED `set_channel` per enabled secondary, and nothing on the next pass.
+    private static func secondaryChannelCheck(psk: Data) throws -> String? {
+        let profile = BuiltInProfiles.takTracker()
+        func slot(_ index: Int, _ role: UInt64, _ name: String) -> Data {
+            PhoneAPICodec.serialize([
+                PhoneAPICodec.Field(number: 1, value: .varint(UInt64(index))),
+                PhoneAPICodec.Field(number: 2, value: .bytes(PhoneAPICodec.serialize([
+                    PhoneAPICodec.Field(number: 2, value: .bytes(Data(repeating: 0x33, count: 16))),
+                    PhoneAPICodec.Field(number: 3, value: .bytes(Data(name.utf8))),
+                ]))),
+                PhoneAPICodec.Field(number: 3, value: .varint(role)),
+            ])
+        }
+        let primary = try PhoneAPICodec.channelMessage(
+            name: profile.channel.name,
+            psk: psk,
+            uplink: true,
+            downlink: true,
+            preciseLocation: true,
+            channelID: 0x11223344
+        )
+        let radio = RadioInventory(
+            lora: try PhoneAPICodec.loraConfig(merging: Data(), settings: profile.lora),
+            device: try PhoneAPICodec.deviceConfig(merging: Data(), role: .takTracker, settings: profile.device),
+            position: try PhoneAPICodec.positionConfig(merging: Data(), settings: profile.position),
+            display: try PhoneAPICodec.displayConfig(merging: Data(), settings: profile.display),
+            owner: try PhoneAPICodec.userMessage(merging: Data(), longName: "Tracker", shortName: "Trk"),
+            longName: "Tracker",
+            shortName: "Trk",
+            channels: [primary, slot(1, 2, "MCSC"), slot(2, 0, "Old"), slot(3, 2, "")],
+            observedConfigFields: [1, 2, 5, 6],
+            observedModuleFields: []
+        )
+        func plan(_ inventory: RadioInventory) throws -> SyncPlan {
+            try SyncDiff.plan(
+                inventory: inventory,
+                profile: profile,
+                role: .takTracker,
+                names: RadioNames(longName: nil, shortName: nil),
+                longEdited: false,
+                shortEdited: false,
+                psk: psk,
+                function: .tracker,
+                wifiSSID: "",
+                wifiPSK: Data(),
+                mqttPassword: Data()
+            )
+        }
+        guard try PhoneAPICodec.snapshot(inventory: radio).enabledSecondaryChannelIndexes == [1, 3] else {
+            return "secondary-snapshot"
+        }
+        let first = try plan(radio)
+        guard first.changes.map(\.id) == ["channel.secondary.1", "channel.secondary.3"] else { return "secondary-ids" }
+        guard first.changes.first?.detail == "Remove secondary channel \"MCSC\" (index 1)",
+              first.changes.last?.detail == "Remove secondary channel \"unnamed\" (index 3)" else {
+            return "secondary-detail"
+        }
+        guard first.writes == [
+            .channel(PhoneAPICodec.disabledChannel(index: 1)),
+            .channel(PhoneAPICodec.disabledChannel(index: 3)),
+        ] else { return "secondary-writes" }
+        // Index 1, role DISABLED (explicit 0), no settings: no name or PSK.
+        guard PhoneAPICodec.disabledChannel(index: 1) == Data([0x08, 0x01, 0x18, 0x00]) else { return "secondary-body" }
+        // Diff detail rows never carry key bytes.
+        guard !first.changes.contains(where: { $0.detail.contains("3333") }) else { return "secondary-secret" }
+        let cleared = try radio.applying(first.writes)
+        guard cleared.channels.count == 4 else { return "secondary-apply" }
+        guard try PhoneAPICodec.snapshot(inventory: cleared).enabledSecondaryChannelIndexes == [] else {
+            return "secondary-verify"
+        }
+        let again = try plan(cleared)
+        guard again.changes.isEmpty, again.writes.isEmpty else { return "secondary-second" }
+        return nil
+    }
+
+    /// A radio at ALL (proto3 0, field omitted) and a LOCAL_ONLY profile differ in exactly
+    /// `device.rebroadcast_mode`. With a role change too, role and mode share one device `set_config`,
+    /// so the radio still reboots once. Gateways and KNOWN_ONLY take the same path.
+    private static func rebroadcastModeCheck(psk: Data) throws -> String? {
+        var all = BuiltInProfiles.takTracker()
+        all.device.rebroadcastMode = .all
+        var local = all
+        local.device.rebroadcastMode = .localOnly
+        let radio = RadioInventory(
+            lora: try PhoneAPICodec.loraConfig(merging: Data(), settings: all.lora),
+            device: try PhoneAPICodec.deviceConfig(merging: Data(), role: .takTracker, settings: all.device),
+            position: try PhoneAPICodec.positionConfig(merging: Data(), settings: all.position),
+            display: try PhoneAPICodec.displayConfig(merging: Data(), settings: all.display),
+            owner: try PhoneAPICodec.userMessage(merging: Data(), longName: "Tracker", shortName: "Trk"),
+            longName: "Tracker",
+            shortName: "Trk",
+            channels: [try PhoneAPICodec.channelMessage(
+                name: all.channel.name,
+                psk: psk,
+                uplink: true,
+                downlink: true,
+                preciseLocation: true,
+                channelID: 0x11223344
+            )],
+            observedConfigFields: [1, 2, 5, 6],
+            observedModuleFields: []
+        )
+        guard PhoneAPICodec.numeric(try PhoneAPICodec.parse(radio.device), 6) == 0 else { return "rebroadcast-mode-fixture" }
+
+        func plan(_ inventory: RadioInventory, _ profile: FleetProfile, _ role: DeviceRole) throws -> SyncPlan {
+            try SyncDiff.plan(
+                inventory: inventory,
+                profile: profile,
+                role: role,
+                names: RadioNames(longName: nil, shortName: nil),
+                longEdited: false,
+                shortEdited: false,
+                psk: psk,
+                function: .tracker,
+                wifiSSID: "",
+                wifiPSK: Data(),
+                mqttPassword: Data()
+            )
+        }
+        func deviceWrites(_ plan: SyncPlan) -> [Data] {
+            plan.writes.compactMap { if case .config(.device, let body) = $0 { return body }; return nil }
+        }
+
+        let only = try plan(radio, local, .takTracker)
+        guard only.changes.map(\.id) == ["device.rebroadcast_mode"] else { return "rebroadcast-mode-only" }
+        guard only.changes.first?.detail == "ALL → LOCAL_ONLY" else { return "rebroadcast-mode-detail" }
+        guard only.progress.debugLines == ["device.rebroadcast_mode: ALL → LOCAL_ONLY"] else { return "rebroadcast-mode-debug" }
+        guard only.writes.count == 1, let body = deviceWrites(only).first,
+              PhoneAPICodec.numeric(try PhoneAPICodec.parse(body), 6) == 2 else { return "rebroadcast-mode-write" }
+        guard try plan(radio.applying(only.writes), local, .takTracker).writes.isEmpty else { return "rebroadcast-mode-second" }
+
+        let combined = try plan(radio, local, .clientBase)
+        guard combined.changes.map(\.id) == ["device.role", "device.rebroadcast_mode"] else { return "rebroadcast-mode-role-ids" }
+        guard combined.writes.count == 1, let combinedBody = deviceWrites(combined).first else { return "rebroadcast-mode-role-write" }
+        let combinedFields = try PhoneAPICodec.parse(combinedBody)
+        guard PhoneAPICodec.numeric(combinedFields, 1) == 12, PhoneAPICodec.numeric(combinedFields, 6) == 2 else {
+            return "rebroadcast-mode-role-body"
+        }
+        let rows = ApplyStepRow.rows(state: .applyingChanges, progress: combined.progress)
+        guard rows.filter({ $0.id == "reboot" }).count == 1 else { return "rebroadcast-mode-reboot" }
+        let combinedAgain = try plan(radio.applying(combined.writes), local, .clientBase)
+        guard combinedAgain.changes.isEmpty, combinedAgain.writes.isEmpty else { return "rebroadcast-mode-role-second" }
+
+        var known = all
+        known.device.rebroadcastMode = .knownOnly
+        let knownPlan = try plan(radio, known, .router)
+        guard knownPlan.changes.map(\.detail) == ["TAK_TRACKER → ROUTER", "ALL → KNOWN_ONLY"], knownPlan.writes.count == 1,
+              let knownBody = deviceWrites(knownPlan).first,
+              PhoneAPICodec.numeric(try PhoneAPICodec.parse(knownBody), 6) == 3 else { return "rebroadcast-mode-known" }
+
+        // Back to ALL omits field 6 (proto3 default) and reads back as ALL.
+        let localRadio = try radio.applying(only.writes)
+        let backToAll = try plan(localRadio, all, .takTracker)
+        guard backToAll.changes.map(\.detail) == ["LOCAL_ONLY → ALL"], let allBody = deviceWrites(backToAll).first,
+              PhoneAPICodec.numeric(try PhoneAPICodec.parse(allBody), 6) == 0 else { return "rebroadcast-mode-all" }
+
+        let gateway = try SyncDiff.plan(
+            inventory: radio,
+            profile: local,
+            role: .client,
+            names: RadioNames(longName: nil, shortName: nil),
+            longEdited: false,
+            shortEdited: false,
+            psk: psk,
+            function: .gateway,
+            wifiSSID: "OTS-Shop",
+            wifiPSK: Data("wifi-secret".utf8),
+            mqttPassword: Data("mqtt-secret".utf8)
+        )
+        guard gateway.changes.contains(where: { $0.id == "device.rebroadcast_mode" && $0.detail == "ALL → LOCAL_ONLY" }),
+              deviceWrites(gateway).count == 1 else { return "rebroadcast-mode-gateway" }
+        return nil
+    }
+
+    /// A fixed relay set to ROUTER (protobuf 2) or CLIENT_BASE (protobuf 12) on a radio that otherwise
+    /// matches the profile. Only `device.role` changes. No network or MQTT write, so an nRF52 without
+    /// Wi-Fi is untouched there. `tag` keeps failure labels distinct per role.
+    private static func relayCheck(
+        profile: FleetProfile,
+        psk: Data,
+        role: DeviceRole,
+        wire: UInt64,
+        label: String,
+        tag: String
+    ) throws -> String? {
+        let inventory = RadioInventory(
+            lora: try PhoneAPICodec.loraConfig(merging: Data(), settings: profile.lora),
+            device: try PhoneAPICodec.deviceConfig(merging: Data(), role: .takTracker, settings: profile.device),
+            position: try PhoneAPICodec.positionConfig(merging: Data(), settings: profile.position),
+            display: try PhoneAPICodec.displayConfig(merging: Data(), settings: profile.display),
+            owner: try PhoneAPICodec.userMessage(merging: Data(), longName: "Relay", shortName: "Rly"),
+            longName: "Relay",
+            shortName: "Rly",
+            channels: [try PhoneAPICodec.channelMessage(
+                name: profile.channel.name,
+                psk: psk,
+                uplink: true,
+                downlink: true,
+                preciseLocation: true,
+                channelID: 0x11223344
+            )],
+            observedConfigFields: [1, 2, 5, 6],
+            observedModuleFields: []
+        )
+        let plan = try SyncDiff.plan(
+            inventory: inventory,
+            profile: profile,
+            role: role,
+            names: RadioNames(longName: nil, shortName: nil),
+            longEdited: false,
+            shortEdited: false,
+            psk: psk,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
+        )
+        guard plan.changes.map(\.id) == ["device.role"] else { return "\(tag)-only" }
+        guard plan.changes.first?.detail == "TAK_TRACKER → \(label)" else { return "\(tag)-detail" }
+        guard plan.writes.count == 1, case .config(.device, let body) = plan.writes.first else { return "\(tag)-write" }
+        guard PhoneAPICodec.numeric(try PhoneAPICodec.parse(body), 1) == wire else { return "\(tag)-value" }
+        let updated = try inventory.applying(plan.writes)
+        let again = try SyncDiff.plan(
+            inventory: updated,
+            profile: profile,
+            role: role,
+            names: RadioNames(longName: nil, shortName: nil),
+            longEdited: false,
+            shortEdited: false,
+            psk: psk,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
+        )
+        guard again.changes.isEmpty, again.writes.isEmpty else { return "\(tag)-second" }
+        let back = try SyncDiff.plan(
+            inventory: updated,
+            profile: profile,
+            role: .takTracker,
+            names: RadioNames(longName: nil, shortName: nil),
+            longEdited: false,
+            shortEdited: false,
+            psk: psk,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
+        )
+        guard back.changes.map(\.detail) == ["\(label) → TAK_TRACKER"] else { return "\(tag)-back" }
         return nil
     }
 
@@ -774,7 +1192,7 @@ enum SyncDiff {
     private static func trackerMQTTCheck(profile: FleetProfile, psk: Data) throws -> String? {
         var drifted = profile.lora
         drifted.ignoreMQTT = true
-        drifted.configOkToMQTT = false
+        drifted.configOkToMQTT = !profile.lora.configOkToMQTT
         let inventory = RadioInventory(
             lora: try PhoneAPICodec.loraConfig(merging: Data(), settings: drifted),
             device: try PhoneAPICodec.deviceConfig(merging: Data(), role: .takTracker, settings: profile.device),
@@ -872,7 +1290,7 @@ enum SyncDiff {
             wifiPSK: Data(),
             mqttPassword: Data()
         )
-        guard plan.changes.map(\.id) == ["device.rebroadcast"] else { return "rebroadcast-id" }
+        guard plan.changes.map(\.id) == ["device.rebroadcast_mode"] else { return "rebroadcast-id" }
         guard plan.changes.first?.detail == "CORE_PORTNUMS_ONLY → ALL" else { return "rebroadcast-detail" }
         guard plan.writes.count == 1, case .config(.device, _) = plan.writes.first else { return "rebroadcast-write" }
         let updated = try inventory.applying(plan.writes)
@@ -903,7 +1321,7 @@ enum SyncDiff {
             wifiPSK: Data("wifi-secret".utf8),
             mqttPassword: Data("mqtt-secret".utf8)
         )
-        guard gateway.changes.contains(where: { $0.id == "device.rebroadcast" && $0.detail == "CORE_PORTNUMS_ONLY → ALL" }) else {
+        guard gateway.changes.contains(where: { $0.id == "device.rebroadcast_mode" && $0.detail == "CORE_PORTNUMS_ONLY → ALL" }) else {
             return "rebroadcast-gateway"
         }
         return nil

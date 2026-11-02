@@ -85,7 +85,7 @@ final class ApplyDriver: ObservableObject {
         }
         let nextSession = ApplySession(
             profile: prepared,
-            role: function == .gateway ? .client : role,
+            role: function == .gateway ? DeviceRole.gatewayRole(role) : role,
             function: function,
             wifiNetworkID: wifiNetworkID ?? prepared.wifiNetworks.first?.id,
             names: names,
