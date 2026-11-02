@@ -355,7 +355,8 @@ struct ApplySetupView: View {
         let appliedRole: DeviceRole
         if function == .gateway {
             appliedRole = DeviceRole.gatewayRole(role)
-        } else if let role {
+        } else if let role, role != .client {
+            // CLIENT is the gateway role; a Tracker must pick one of the tracker/relay roles.
             appliedRole = role
         } else {
             return
