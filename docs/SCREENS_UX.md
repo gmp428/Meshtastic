@@ -42,7 +42,7 @@ Sections matching the model: LoRa, Channel, Device defaults, Position, Display, 
 | LoRa preset | Picker of all Meshtastic presets (default Medium Range - Fast); same on every radio |
 | Slot | Stepper/number, default 50 |
 | Ignore MQTT | Locked Off |
-| Ok to MQTT | Locked On |
+| Ok to MQTT | Two toggles, Trackers and Gateway, both default Off (gateway On broke iTAK delivery in field testing) |
 | Hop limit | Locked 3 |
 | Transmit | Locked On |
 | Default role | Segmented: TAK Tracker \| TAK \| Client Base \| Router |

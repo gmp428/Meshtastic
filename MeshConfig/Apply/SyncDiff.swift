@@ -184,6 +184,9 @@ enum SyncDiff {
         }
 
         let loraFields = try PhoneAPICodec.parse(inventory.lora)
+        // Ok to MQTT is chosen per function (tracker vs gateway); everything else is the fleet value.
+        var lora = profile.lora
+        lora.configOkToMQTT = profile.lora.okToMQTT(for: function)
         var loraChanges: [SyncChange] = []
         noteBool(&loraChanges, id: "lora.usePreset", title: "LoRa use preset", field: 1, fields: loraFields, desired: profile.lora.usePreset)
         noteExact(
@@ -220,10 +223,10 @@ enum SyncDiff {
         )
         noteBool(&loraChanges, id: "lora.tx", title: "Transmit", field: 9, fields: loraFields, desired: profile.lora.txEnabled)
         noteBool(&loraChanges, id: "lora.ignoreMQTT", title: "Ignore MQTT", field: 104, fields: loraFields, desired: profile.lora.ignoreMQTT)
-        noteBool(&loraChanges, id: "lora.config_ok_to_mqtt", title: "Ok to MQTT", field: 105, fields: loraFields, desired: profile.lora.configOkToMQTT)
+        noteBool(&loraChanges, id: "lora.config_ok_to_mqtt", title: "Ok to MQTT", field: 105, fields: loraFields, desired: lora.configOkToMQTT)
         if !loraChanges.isEmpty {
             changes.append(contentsOf: loraChanges)
-            writes.append(.config(.lora, try PhoneAPICodec.loraConfig(merging: inventory.lora, settings: profile.lora)))
+            writes.append(.config(.lora, try PhoneAPICodec.loraConfig(merging: inventory.lora, settings: lora)))
         }
 
         let deviceFields = try PhoneAPICodec.parse(inventory.device)
@@ -664,7 +667,7 @@ enum SyncDiff {
         let zone = Data((profile.device.timezone ?? "").utf8)
         let noisy = RadioInventory(
             lora: RawProto.message([
-                (105, .varint(1)),
+                (105, .varint(0)),
                 (11, .varint(50)),
                 (8, .varint(3)),
                 (7, .fixed32(1)),
@@ -829,12 +832,105 @@ enum SyncDiff {
         if let problem = try gatewayCheck(profile: profile, psk: psk) { return problem }
         if let problem = try rebroadcastModeCheck(psk: psk) { return problem }
         if let problem = try secondaryChannelCheck(psk: psk) { return problem }
+        if let problem = try fieldTestCheck(psk: psk) { return problem }
         if let problem = try relayCheck(profile: profile, psk: psk, role: .router, wire: 2, label: "ROUTER", tag: "router") {
             return problem
         }
         if let problem = try relayCheck(profile: profile, psk: psk, role: .clientBase, wire: 12, label: "CLIENT_BASE", tag: "client-base") {
             return problem
         }
+        return nil
+    }
+
+    /// Field-test settings (Nov 2026): a tracker at smart distance 20 m with Ok to MQTT on and Ignore MQTT on
+    /// is pulled back to 10 m / off / off in one LoRa and one position write. Ok to MQTT follows the function.
+    private static func fieldTestCheck(psk: Data) throws -> String? {
+        let profile = BuiltInProfiles.takTracker()
+        guard profile.lora.modemPreset == .mediumFast,
+              !profile.lora.ignoreMQTT,
+              !profile.lora.configOkToMQTT, !profile.lora.gatewayConfigOkToMQTT,
+              profile.position.smartPosition,
+              profile.position.smartMinimumDistance == 10,
+              profile.position.smartMinimumIntervalSecs == 15,
+              profile.position.broadcastSecs == 60,
+              profile.position.gpsUpdateIntervalSecs == 30,
+              profile.device.rebroadcastMode == .localOnly,
+              profile.channel.uplinkEnabled, profile.channel.downlinkEnabled,
+              profile.mqtt.root == "opentakserver",
+              profile.mqtt.port == 8883,
+              profile.mqtt.host == "mcsctak.duckdns.org" else { return "field-defaults" }
+        var mqtt = profile.mqtt
+        mqtt.port = 1883
+        guard mqtt.address == "mcsctak.duckdns.org:1883" else { return "field-port" }
+        mqtt.port = nil
+        guard mqtt.address == "mcsctak.duckdns.org" else { return "field-port-clear" }
+        guard DeviceRole.gatewayRole(nil) == .client, DeviceRole.gatewayRole(.clientBase) == .clientBase,
+              DeviceRole.gatewayRole(.takTracker) == .client else { return "field-gateway-role" }
+
+        var radioLora = profile.lora
+        radioLora.ignoreMQTT = true
+        radioLora.configOkToMQTT = true
+        var radioPosition = profile.position
+        radioPosition.smartMinimumDistance = 20
+        let radio = RadioInventory(
+            lora: try PhoneAPICodec.loraConfig(merging: Data(), settings: radioLora),
+            device: try PhoneAPICodec.deviceConfig(merging: Data(), role: .takTracker, settings: profile.device),
+            position: try PhoneAPICodec.positionConfig(merging: Data(), settings: radioPosition),
+            display: try PhoneAPICodec.displayConfig(merging: Data(), settings: profile.display),
+            owner: try PhoneAPICodec.userMessage(merging: Data(), longName: "Tracker", shortName: "Trk"),
+            longName: "Tracker",
+            shortName: "Trk",
+            channels: [try PhoneAPICodec.channelMessage(
+                name: profile.channel.name,
+                psk: psk,
+                uplink: true,
+                downlink: true,
+                preciseLocation: true,
+                channelID: 0x11223344
+            )],
+            observedConfigFields: [1, 2, 5, 6],
+            observedModuleFields: []
+        )
+        let plan = try SyncDiff.plan(
+            inventory: radio,
+            profile: profile,
+            role: .takTracker,
+            names: RadioNames(longName: nil, shortName: nil),
+            longEdited: false,
+            shortEdited: false,
+            psk: psk,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
+        )
+        guard plan.changes.map(\.id) == ["lora.ignoreMQTT", "lora.config_ok_to_mqtt", "position.smartDistance"] else {
+            return "field-ids"
+        }
+        guard plan.changes.last?.detail == "20 m → 10 m" else { return "field-distance" }
+        guard plan.writes.count == 2 else { return "field-writes" }
+        let updated = try radio.applying(plan.writes)
+        let snap = try PhoneAPICodec.snapshot(inventory: updated)
+        guard snap.ignoreMQTT == false, snap.configOkToMQTT == false, snap.smartMinimumDistance == 10 else {
+            return "field-readback"
+        }
+        let rows = ProfileAcceptance.evaluate(
+            profile: profile,
+            snap: snap,
+            appliedRole: .takTracker,
+            appliedLongName: nil,
+            function: .tracker,
+            wifiSSID: "",
+            wifiPSK: Data(),
+            mqttPassword: Data()
+        )
+        for id in ["lora.preset", "lora.mqtt", "lora.okToMqtt", "pos.smart", "pos.smartDistance", "pos.smartInterval",
+                   "pos.broadcastSecs", "pos.gpsInterval", "dev.rebroadcast", "ch.onlyPrimary", "ch.uplink", "ch.downlink"] {
+            guard rows.first(where: { $0.id == id })?.ok == true else { return "field-verify-\(id)" }
+        }
+        var gatewayOn = profile
+        gatewayOn.lora.gatewayConfigOkToMQTT = true
+        guard gatewayOn.lora.okToMQTT(for: .gateway), !gatewayOn.lora.okToMQTT(for: .tracker) else { return "field-ok-function" }
         return nil
     }
 
@@ -1096,7 +1192,7 @@ enum SyncDiff {
     private static func trackerMQTTCheck(profile: FleetProfile, psk: Data) throws -> String? {
         var drifted = profile.lora
         drifted.ignoreMQTT = true
-        drifted.configOkToMQTT = false
+        drifted.configOkToMQTT = !profile.lora.configOkToMQTT
         let inventory = RadioInventory(
             lora: try PhoneAPICodec.loraConfig(merging: Data(), settings: drifted),
             device: try PhoneAPICodec.deviceConfig(merging: Data(), role: .takTracker, settings: profile.device),

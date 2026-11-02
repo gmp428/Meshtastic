@@ -80,7 +80,11 @@ struct ApplySetupView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.red)
                         }
-                        Text("Gateway uses device role CLIENT. Wi-Fi is turned on, which disables Bluetooth after the radio reboots.")
+                        Picker("Gateway role", selection: gatewayRoleBinding) {
+                            Text(DeviceRole.client.displayName).tag(DeviceRole.client)
+                            Text(DeviceRole.clientBase.displayName).tag(DeviceRole.clientBase)
+                        }
+                        Text("Gateway uses device role CLIENT (or Client Base). Wi-Fi is turned on, which disables Bluetooth after the radio reboots.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -134,7 +138,7 @@ struct ApplySetupView: View {
                                 selectedProfileID = device.profileID
                                 function = device.function
                                 wifiNetworkID = device.wifiNetworkID
-                                role = device.function == .gateway ? .client : device.role
+                                role = device.function == .gateway ? DeviceRole.gatewayRole(device.role) : device.role
                                 fillNames(long: device.longName ?? "", short: device.shortName ?? "")
                                 preferredPeripheralID = device.peripheralID
                                 rosterDeviceID = device.id
@@ -240,7 +244,7 @@ struct ApplySetupView: View {
                 selectedProfileID = prefill.profileID
                 function = prefill.function
                 wifiNetworkID = prefill.wifiNetworkID
-                role = prefill.function == .gateway ? .client : prefill.role
+                role = prefill.function == .gateway ? DeviceRole.gatewayRole(prefill.role) : prefill.role
                 fillNames(long: prefill.longName ?? "", short: prefill.shortName ?? "")
                 preferredPeripheralID = prefill.peripheralID
                 rosterDeviceID = prefill.rosterDeviceID
@@ -338,11 +342,19 @@ struct ApplySetupView: View {
         )
     }
 
+    /// Gateway role choice: CLIENT (default) or CLIENT_BASE.
+    private var gatewayRoleBinding: Binding<DeviceRole> {
+        Binding(
+            get: { DeviceRole.gatewayRole(role) },
+            set: { role = $0 }
+        )
+    }
+
     private func startScan() async {
         guard let profile = selectedProfile else { return }
         let appliedRole: DeviceRole
         if function == .gateway {
-            appliedRole = .client
+            appliedRole = DeviceRole.gatewayRole(role)
         } else if let role {
             appliedRole = role
         } else {

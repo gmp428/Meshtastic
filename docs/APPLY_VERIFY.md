@@ -119,7 +119,7 @@ After channel Send, read back and require **all** TAK checks green:
 
 1. LoRa preset matches the profile  
 2. Ignore MQTT off  
-3. Ok to MQTT on  
+3. Ok to MQTT matches the profile for this function (tracker or gateway; default off)  
 4. Hop limit is 3  
 5. Transmit is on  
 6. Frequency slot matches profile  

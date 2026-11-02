@@ -28,10 +28,14 @@ struct ProfileEditorView: View {
                     Text("Frequency slot \(profile.lora.frequencySlot)")
                 }
                 LabeledContent("Ignore MQTT", value: "Off")
-                LabeledContent("Ok to MQTT", value: "On")
                 LabeledContent("Hop limit", value: "3")
                 LabeledContent("Transmit", value: "On")
-                Text("These are locked so every radio, including trackers, can be uploaded by the gateway.")
+                Text("Ignore MQTT is locked off so trackers receive iTAK/OTS messages the gateway relays over LoRa.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Toggle("Ok to MQTT (trackers)", isOn: $profile.lora.configOkToMQTT)
+                Toggle("Ok to MQTT (gateway)", isOn: $profile.lora.gatewayConfigOkToMQTT)
+                Text("Sets the ok_to_mqtt bit on outgoing packets. Default off: in field testing the gateway with Ok to MQTT on broke iTAK delivery.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Picker("Region", selection: $profile.lora.region) {
@@ -118,9 +122,11 @@ struct ProfileEditorView: View {
                 }
             }
             Section("Server / MQTT") {
-                TextField("MQTT address", text: $profile.mqtt.address)
+                TextField("MQTT host", text: $profile.mqtt.host)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                TextField("Port", text: mqttPortText, prompt: Text(String(MQTTSettings.defaultPort)))
+                    .keyboardType(.numberPad)
                 TextField("Username", text: $profile.mqtt.username)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -205,6 +211,17 @@ struct ProfileEditorView: View {
 
     private var regionChoices: [LoRaRegion] {
         LoRaRegion.allCases.filter { $0 != .unset || profile.lora.region == .unset }
+    }
+
+    /// Meshtastic stores the port inside `address` as host:port. Blank leaves no port (firmware default).
+    private var mqttPortText: Binding<String> {
+        Binding(
+            get: { profile.mqtt.port.map(String.init) ?? "" },
+            set: { text in
+                let digits = text.filter(\.isNumber)
+                profile.mqtt.port = digits.isEmpty ? nil : UInt16(digits)
+            }
+        )
     }
 
     private var timezoneText: Binding<String> {

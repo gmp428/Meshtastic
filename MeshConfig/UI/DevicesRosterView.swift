@@ -184,8 +184,12 @@ struct DeviceDetailView: View {
                     }
                     } else {
                         Section("Role") {
-                            LabeledContent("Role", value: DeviceRole.client.chipTitle)
-                            Text("A gateway is always CLIENT. Changing function does not write the radio until you run Apply.")
+                            Picker("Role", selection: roleBinding) {
+                                Text(DeviceRole.client.displayName).tag(DeviceRole.client)
+                                Text(DeviceRole.clientBase.displayName).tag(DeviceRole.clientBase)
+                            }
+                            .pickerStyle(.inline)
+                            Text("A gateway is CLIENT or Client Base. Changing function does not write the radio until you run Apply.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }

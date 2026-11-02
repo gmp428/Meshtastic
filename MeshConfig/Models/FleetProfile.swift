@@ -31,12 +31,12 @@ extension FleetProfile {
     /// smart position and its distance/interval, position broadcast interval, geoidal separation, units,
     /// notes, rebroadcast mode, and the default role stay editable.
     /// Altitude is always the HAE path: ALTITUDE on, ALTITUDE_MSL off.
-    /// Ignore MQTT stays off and Ok to MQTT stays on so a gateway will upload the fleet.
+    /// Ignore MQTT stays off on every radio so trackers receive iTAK/OTS traffic the gateway relays
+    /// from MQTT onto LoRa. Ok to MQTT is a per-profile, per-function setting (see `LoRaSettings`).
     mutating func applyTAKTemplateLocks() {
         lora.usePreset = true
         // The modem preset is a per-profile choice. A saved profile keeps the preset it decoded.
         lora.ignoreMQTT = false
-        lora.configOkToMQTT = true
         lora.hopLimit = 3
         lora.txEnabled = true
         // Rebroadcast is a fleet setting: ALL, LOCAL_ONLY, or KNOWN_ONLY. CORE_PORTNUMS_ONLY is not offered
@@ -122,13 +122,23 @@ struct LoRaSettings: Hashable, Sendable {
     var hopLimit: UInt32 = 3
     /// Meshtastic `tx_enabled`. TAK fleets leave the radio transmitting.
     var txEnabled: Bool = true
-    /// Meshtastic `config_ok_to_mqtt`. Required or a gateway drops the packet.
-    var configOkToMQTT: Bool = true
+    /// Meshtastic `config_ok_to_mqtt` (field 105, "Sets the ok_to_mqtt bit on outgoing packets")
+    /// for Tracker-function radios. New profiles default OFF.
+    var configOkToMQTT: Bool = false
+    /// `config_ok_to_mqtt` for the Gateway radio. Defaults OFF: in field testing (Nov 2026) the
+    /// Heltec V4 gateway with Ok to MQTT ON broke iTAK delivery; OFF delivered. The earlier
+    /// "every radio Ok to MQTT on" rule was reverted to this per-function setting.
+    var gatewayConfigOkToMQTT: Bool = false
+
+    /// The `config_ok_to_mqtt` value Apply writes and Verify expects for this device function.
+    func okToMQTT(for function: DeviceFunction) -> Bool {
+        function == .gateway ? gatewayConfigOkToMQTT : configOkToMQTT
+    }
 }
 
 extension LoRaSettings: Codable {
     enum CodingKeys: String, CodingKey {
-        case usePreset, modemPreset, ignoreMQTT, frequencySlot, region, hopLimit, txEnabled, configOkToMQTT
+        case usePreset, modemPreset, ignoreMQTT, frequencySlot, region, hopLimit, txEnabled, configOkToMQTT, gatewayConfigOkToMQTT
     }
 
     init(from decoder: Decoder) throws {
@@ -140,7 +150,9 @@ extension LoRaSettings: Codable {
         region = try container.decode(LoRaRegion.self, forKey: .region)
         hopLimit = try container.decodeIfPresent(UInt32.self, forKey: .hopLimit) ?? 3
         txEnabled = try container.decodeIfPresent(Bool.self, forKey: .txEnabled) ?? true
-        configOkToMQTT = try container.decodeIfPresent(Bool.self, forKey: .configOkToMQTT) ?? true
+        // A saved profile keeps the tracker value it stored (older builds forced ON). Missing → OFF.
+        configOkToMQTT = try container.decodeIfPresent(Bool.self, forKey: .configOkToMQTT) ?? false
+        gatewayConfigOkToMQTT = try container.decodeIfPresent(Bool.self, forKey: .gatewayConfigOkToMQTT) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -153,6 +165,7 @@ extension LoRaSettings: Codable {
         try container.encode(hopLimit, forKey: .hopLimit)
         try container.encode(txEnabled, forKey: .txEnabled)
         try container.encode(configOkToMQTT, forKey: .configOkToMQTT)
+        try container.encode(gatewayConfigOkToMQTT, forKey: .gatewayConfigOkToMQTT)
     }
 }
 
@@ -273,6 +286,33 @@ struct MQTTSettings: Codable, Hashable, Sendable {
     var passwordRef: KeychainSecretRef
     var root: String
 
+    static let defaultPort: UInt16 = 8883
+
+    /// Meshtastic `MQTTConfig` has no port field; the firmware reads the port from `address` as `host:port`.
+    var host: String {
+        get { Self.split(address).host }
+        set { address = Self.join(host: newValue, port: port) }
+    }
+
+    var port: UInt16? {
+        get { Self.split(address).port }
+        set { address = Self.join(host: host, port: newValue) }
+    }
+
+    private static func split(_ address: String) -> (host: String, port: UInt16?) {
+        let trimmed = address.trimmingCharacters(in: .whitespaces)
+        guard let colon = trimmed.lastIndex(of: ":"), !trimmed.hasSuffix("]") else { return (trimmed, nil) }
+        let portText = trimmed[trimmed.index(after: colon)...]
+        guard let port = UInt16(portText) else { return (trimmed, nil) }
+        return (String(trimmed[..<colon]), port)
+    }
+
+    private static func join(host: String, port: UInt16?) -> String {
+        let host = host.trimmingCharacters(in: .whitespaces)
+        guard let port else { return host }
+        return "\(host):\(port)"
+    }
+
     static let openTAK = MQTTSettings(
         address: "mcsctak.duckdns.org:8883",
         username: "meshgw",
@@ -339,6 +379,11 @@ enum DeviceRole: String, Codable, CaseIterable, Sendable {
         }
     }
 
+    /// Gateways run CLIENT unless CLIENT_BASE was chosen.
+    static func gatewayRole(_ role: DeviceRole?) -> DeviceRole {
+        role == .clientBase ? .clientBase : .client
+    }
+
     var chipTitle: String {
         switch self {
         case .client: return "Client"
@@ -366,7 +411,7 @@ enum DeviceRole: String, Codable, CaseIterable, Sendable {
 }
 
 /// Per-device job in the TAK fleet. A non-gateway keeps the chosen role (TAK, TAK Tracker, Client Base, or Router).
-/// A gateway is CLIENT. Raw values are persisted; do not rename them.
+/// A gateway is CLIENT or CLIENT_BASE. Raw values are persisted; do not rename them.
 enum DeviceFunction: String, Codable, CaseIterable, Sendable {
     case tracker
     case gateway
@@ -383,7 +428,7 @@ enum DeviceFunction: String, Codable, CaseIterable, Sendable {
         case .tracker:
             return "Not a gateway. MQTT on this radio stays off and no Wi-Fi is written. Role is TAK Tracker, TAK, Client Base (rooftop relay), or Router (tower/mountaintop)."
         case .gateway:
-            return "Heltec-style node. Role CLIENT, Wi-Fi on, MQTT module pointed at OpenTAKServer."
+            return "Heltec-style node. Role CLIENT (or Client Base), Wi-Fi on, MQTT module pointed at OpenTAKServer."
         }
     }
 }
@@ -667,7 +712,7 @@ enum ProfileAcceptance {
     static let takChecks: [(id: String, label: String)] = [
         ("lora.preset", "LoRa preset matches the profile"),
         ("lora.mqtt", "Ignore MQTT is off"),
-        ("lora.okToMqtt", "Ok to MQTT is on"),
+        ("lora.okToMqtt", "Ok to MQTT matches the profile for this function (default off)"),
         ("lora.hop", "Hop limit is 3"),
         ("lora.tx", "Transmit is on"),
         ("lora.slot", "Frequency slot is 50 (or profile override)"),
@@ -706,7 +751,11 @@ enum ProfileAcceptance {
                 ok: snap.modemPreset == profile.lora.modemPreset
             ),
             VerifyCheckResult(id: "lora.mqtt", label: "Ignore MQTT is off", ok: snap.ignoreMQTT == false),
-            VerifyCheckResult(id: "lora.okToMqtt", label: "Ok to MQTT is on", ok: snap.configOkToMQTT == true),
+            VerifyCheckResult(
+                id: "lora.okToMqtt",
+                label: "Ok to MQTT is \(profile.lora.okToMQTT(for: function) ? "on" : "off")",
+                ok: snap.configOkToMQTT == profile.lora.okToMQTT(for: function)
+            ),
             VerifyCheckResult(id: "lora.hop", label: "Hop limit is 3", ok: snap.hopLimit == profile.lora.hopLimit),
             VerifyCheckResult(id: "lora.tx", label: "Transmit is on", ok: snap.txEnabled == true),
             VerifyCheckResult(id: "lora.slot", label: "Frequency slot matches profile", ok: snap.frequencySlot == profile.lora.frequencySlot),

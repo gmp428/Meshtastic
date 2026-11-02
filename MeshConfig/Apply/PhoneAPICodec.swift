@@ -603,7 +603,8 @@ enum PhoneAPICodec {
             modemPreset: .shortTurbo,
             ignoreMQTT: false,
             frequencySlot: 50,
-            region: .us
+            region: .us,
+            configOkToMQTT: true
         )
         guard try encodeMatches(
             "0801100818fa012007280838014003480150165832c80601",
