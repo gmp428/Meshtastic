@@ -289,6 +289,7 @@ enum PhoneAPICodec {
         // One position set_config carries every position field. Field numbers from protobufs ad0bf31.
         upsertVarint(&fields, 1, UInt64(settings.broadcastSecs))
         upsertVarint(&fields, 2, settings.smartPosition ? 1 : 0)
+        upsertVarint(&fields, 5, UInt64(settings.gpsUpdateIntervalSecs))
         upsertVarint(&fields, 10, UInt64(settings.smartMinimumDistance))
         upsertVarint(&fields, 11, UInt64(settings.smartMinimumIntervalSecs))
         var flags = UInt32(truncatingIfNeeded: numeric(fields, 7))
@@ -467,8 +468,26 @@ enum PhoneAPICodec {
             channel: try parsedChannel(raw),
             owner: inventory.owner,
             network: inventory.network,
-            mqtt: inventory.mqtt
+            mqtt: inventory.mqtt,
+            secondaryChannels: try inventory.channels.map { try parsedChannel($0) }
         )
+    }
+
+    /// `Channel` for admin `set_channel` (admin.proto field 33) that turns off one secondary slot.
+    /// channel.proto: index = 1, role = 3 (DISABLED = 0). No settings, so the slot keeps no name or PSK.
+    static func disabledChannel(index: Int) -> Data {
+        var fields: [Field] = []
+        upsertVarint(&fields, 1, UInt64(index), force: true)
+        upsertVarint(&fields, 3, 0, force: true)
+        return serialize(fields)
+    }
+
+    /// Index, role, and name of each channel. Never exposes the PSK.
+    static func channelSummaries(_ channels: [Data]) throws -> [(index: Int, role: Int, name: String?)] {
+        try channels.map { raw in
+            let parsed = try parsedChannel(raw)
+            return (parsed.index, parsed.role, parsed.name)
+        }
     }
 
     static func snapshot(
@@ -478,7 +497,8 @@ enum PhoneAPICodec {
         channel: ParsedChannel,
         owner: Data,
         network: Data = Data(),
-        mqtt: Data = Data()
+        mqtt: Data = Data(),
+        secondaryChannels: [ParsedChannel]? = nil
     ) throws -> DeviceSnapshot {
         let loraFields = try parse(lora)
         let deviceFields = try parse(device)
@@ -515,6 +535,10 @@ enum PhoneAPICodec {
             smartMinimumDistance: UInt32(truncatingIfNeeded: numeric(positionFields, 10)),
             smartMinimumIntervalSecs: UInt32(truncatingIfNeeded: numeric(positionFields, 11)),
             positionBroadcastSecs: UInt32(truncatingIfNeeded: numeric(positionFields, 1)),
+            gpsUpdateIntervalSecs: UInt32(truncatingIfNeeded: numeric(positionFields, 5)),
+            enabledSecondaryChannelIndexes: secondaryChannels.map { channels in
+                channels.filter { (1...7).contains($0.index) && $0.role != 0 }.map(\.index).sorted()
+            },
             longName: try longName(from: owner),
             wifiEnabled: numeric(networkFields, 1) != 0,
             wifiSSID: textValue(networkFields, 3),
@@ -606,7 +630,7 @@ enum PhoneAPICodec {
             gpsMode: .enabled
         )
         guard try encodeMatches(
-            "083c10013805500a580f6801",
+            "083c1001281e3805500a580f6801",
             positionConfig(merging: positionBase, settings: position)
         ) else { return false }
 

@@ -97,7 +97,14 @@ struct ProfileEditorView: View {
                 Stepper(value: $profile.position.broadcastSecs, in: UInt32(0)...UInt32(86_400), step: 15) {
                     Text("Broadcast interval \(profile.position.broadcastSecs) s")
                 }
-                Text("Written in the one position config write. 0 lets the firmware use its own default.")
+                Stepper(
+                    value: $profile.position.gpsUpdateIntervalSecs,
+                    in: PositionSettings.minimumGPSUpdateIntervalSecs...UInt32(86_400),
+                    step: 30
+                ) {
+                    Text("GPS update interval \(profile.position.gpsUpdateIntervalSecs) s")
+                }
+                Text("Written in the one position config write. For distance and broadcast intervals, 0 lets the firmware use its own default. GPS update interval is at least 30 s.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 LabeledContent("Altitude", value: "HAE (ALTITUDE, not MSL)")

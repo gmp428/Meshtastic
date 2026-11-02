@@ -448,15 +448,19 @@ struct PositionSettings: Hashable, Sendable {
     var smartMinimumIntervalSecs: UInt32 = PositionSettings.defaultSmartMinimumIntervalSecs
     /// Meshtastic `position_broadcast_secs` (field 1).
     var broadcastSecs: UInt32 = PositionSettings.defaultBroadcastSecs
+    /// Meshtastic `gps_update_interval` (field 5), seconds. The Meshtastic iOS app's minimum is 30.
+    var gpsUpdateIntervalSecs: UInt32 = PositionSettings.defaultGPSUpdateIntervalSecs
 
     static let defaultSmartMinimumDistance: UInt32 = 10
     static let defaultSmartMinimumIntervalSecs: UInt32 = 15
     static let defaultBroadcastSecs: UInt32 = 60
+    static let defaultGPSUpdateIntervalSecs: UInt32 = 30
+    static let minimumGPSUpdateIntervalSecs: UInt32 = 30
 }
 
 extension PositionSettings: Codable {
     enum CodingKeys: String, CodingKey {
-        case smartPosition, flags, gpsMode, smartMinimumDistance, smartMinimumIntervalSecs, broadcastSecs
+        case smartPosition, flags, gpsMode, smartMinimumDistance, smartMinimumIntervalSecs, broadcastSecs, gpsUpdateIntervalSecs
     }
 
     /// Profiles saved before these fields existed load with the tracker defaults.
@@ -471,6 +475,8 @@ extension PositionSettings: Codable {
             ?? PositionSettings.defaultSmartMinimumIntervalSecs
         broadcastSecs = try container.decodeIfPresent(UInt32.self, forKey: .broadcastSecs)
             ?? PositionSettings.defaultBroadcastSecs
+        gpsUpdateIntervalSecs = try container.decodeIfPresent(UInt32.self, forKey: .gpsUpdateIntervalSecs)
+            ?? PositionSettings.defaultGPSUpdateIntervalSecs
     }
 
     func encode(to encoder: Encoder) throws {
@@ -481,6 +487,7 @@ extension PositionSettings: Codable {
         try container.encode(smartMinimumDistance, forKey: .smartMinimumDistance)
         try container.encode(smartMinimumIntervalSecs, forKey: .smartMinimumIntervalSecs)
         try container.encode(broadcastSecs, forKey: .broadcastSecs)
+        try container.encode(gpsUpdateIntervalSecs, forKey: .gpsUpdateIntervalSecs)
     }
 }
 
@@ -576,7 +583,8 @@ enum BuiltInProfiles {
                 gpsMode: .enabled,
                 smartMinimumDistance: PositionSettings.defaultSmartMinimumDistance,
                 smartMinimumIntervalSecs: PositionSettings.defaultSmartMinimumIntervalSecs,
-                broadcastSecs: PositionSettings.defaultBroadcastSecs
+                broadcastSecs: PositionSettings.defaultBroadcastSecs,
+                gpsUpdateIntervalSecs: PositionSettings.defaultGPSUpdateIntervalSecs
             ),
             display: DisplaySettings(units: displayUnits),
             defaultRole: .takTracker
@@ -625,6 +633,9 @@ struct DeviceSnapshot: Sendable {
     var smartMinimumDistance: UInt32?
     var smartMinimumIntervalSecs: UInt32?
     var positionBroadcastSecs: UInt32?
+    var gpsUpdateIntervalSecs: UInt32?
+    /// Indexes 1-7 whose role is not DISABLED. Nil when the secondary channels were not read back.
+    var enabledSecondaryChannelIndexes: [Int]?
     /// Meshtastic `User.long_name` read back from the radio.
     var longName: String?
     var wifiEnabled: Bool?
@@ -663,6 +674,7 @@ enum ProfileAcceptance {
         ("ch.name", "Primary channel is private (not LongFast/ShortFast)"),
         ("ch.psk", "Primary PSK is non-default AES-256"),
         ("ch.precise", "Precise location is on"),
+        ("ch.onlyPrimary", "Only the primary channel is enabled (indexes 1-7 disabled)"),
         ("ch.uplink", "Primary channel uplink is on"),
         ("ch.downlink", "Primary channel downlink is on"),
         ("dev.role", "Role matches the function chosen at apply"),
@@ -672,6 +684,7 @@ enum ProfileAcceptance {
         ("pos.smartDistance", "Smart Position minimum distance matches profile"),
         ("pos.smartInterval", "Smart Position minimum interval matches profile"),
         ("pos.broadcastSecs", "Position broadcast interval matches profile"),
+        ("pos.gpsInterval", "GPS update interval matches profile"),
         ("pos.hae", "Position flags: ALTITUDE on, ALTITUDE_MSL off"),
         ("pos.geoid", "GEOIDAL_SEPARATION on when profile requests it"),
     ]
@@ -703,6 +716,11 @@ enum ProfileAcceptance {
             }()),
             VerifyCheckResult(id: "ch.psk", label: "Primary PSK is non-default AES-256", ok: snap.primaryHasNonDefaultPSK == true),
             VerifyCheckResult(id: "ch.precise", label: "Precise location is on", ok: snap.preciseLocation == true),
+            VerifyCheckResult(
+                id: "ch.onlyPrimary",
+                label: "Only the primary channel is enabled",
+                ok: snap.enabledSecondaryChannelIndexes?.isEmpty == true
+            ),
             VerifyCheckResult(id: "ch.uplink", label: "Primary channel uplink is on", ok: snap.uplinkEnabled == true),
             VerifyCheckResult(id: "ch.downlink", label: "Primary channel downlink is on", ok: snap.downlinkEnabled == true),
             VerifyCheckResult(id: "dev.role", label: "Role matches apply choice", ok: snap.role == appliedRole),
@@ -733,6 +751,11 @@ enum ProfileAcceptance {
                 id: "pos.broadcastSecs",
                 label: "Position broadcast interval is \(profile.position.broadcastSecs) s",
                 ok: snap.positionBroadcastSecs == profile.position.broadcastSecs
+            ),
+            VerifyCheckResult(
+                id: "pos.gpsInterval",
+                label: "GPS update interval is \(profile.position.gpsUpdateIntervalSecs) s",
+                ok: snap.gpsUpdateIntervalSecs == profile.position.gpsUpdateIntervalSecs
             ),
             VerifyCheckResult(id: "pos.hae", label: "Altitude is HAE path (not MSL)", ok: snap.positionFlags?.isTAKAltitudeCorrect == true),
             VerifyCheckResult(id: "pos.geoid", label: "Geoidal separation matches profile", ok: snap.positionFlags?.geoidalSeparation == profile.position.flags.geoidalSeparation),

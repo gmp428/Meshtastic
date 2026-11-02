@@ -91,7 +91,18 @@ struct RadioInventory: Equatable, Sendable {
             case .moduleMQTT(let body):
                 copy.mqtt = body
             case .channel(let raw):
-                if let index = copy.channels.firstIndex(where: { channel in
+                let written = try PhoneAPICodec.parse(raw)
+                if PhoneAPICodec.numeric(written, 3) != 1 {
+                    // Secondary-slot write (DISABLED). Replace the slot with the same index.
+                    let slot = PhoneAPICodec.numeric(written, 1)
+                    if let index = copy.channels.firstIndex(where: { channel in
+                        (try? PhoneAPICodec.numeric(PhoneAPICodec.parse(channel), 1)) == slot
+                    }) {
+                        copy.channels[index] = raw
+                    } else {
+                        copy.channels.append(raw)
+                    }
+                } else if let index = copy.channels.firstIndex(where: { channel in
                     (try? PhoneAPICodec.primaryChannel(in: [channel])) != nil
                 }) {
                     copy.channels[index] = raw
@@ -273,6 +284,14 @@ enum SyncDiff {
         )
         noteExact(
             &positionChanges,
+            id: "position.gpsInterval",
+            title: "GPS update interval",
+            radio: PhoneAPICodec.numeric(positionFields, 5),
+            desired: UInt64(profile.position.gpsUpdateIntervalSecs),
+            label: { "\($0) s" }
+        )
+        noteExact(
+            &positionChanges,
             id: "position.smartDistance",
             title: "Smart position minimum distance",
             radio: PhoneAPICodec.numeric(positionFields, 10),
@@ -366,6 +385,19 @@ enum SyncDiff {
             } catch PhoneAPICodec.CodecError.channelNameTooLong {
                 throw SyncError.channelName
             }
+        }
+
+        // The fleet uses only the primary channel. Any secondary slot (index 1-7, role SECONDARY = 2)
+        // left on the radio is turned off with set_channel role DISABLED. Nothing is written when none are on.
+        for summary in try PhoneAPICodec.channelSummaries(inventory.channels)
+        where (1...7).contains(summary.index) && summary.role == 2 {
+            let name = (summary.name?.isEmpty == false) ? summary.name! : "unnamed"
+            changes.append(SyncChange(
+                id: "channel.secondary.\(summary.index)",
+                title: "Secondary channel \(summary.index)",
+                detail: "Remove secondary channel \"\(name)\" (index \(summary.index))"
+            ))
+            writes.append(.channel(PhoneAPICodec.disabledChannel(index: summary.index)))
         }
 
         let mqttFields = try PhoneAPICodec.parse(inventory.mqtt)
@@ -651,6 +683,7 @@ enum SyncDiff {
             position: RawProto.message([
                 (1, .varint(60)),
                 (11, .varint(15)),
+                (5, .varint(30)),
                 (13, .varint(1)),
                 (10, .varint(10)),
                 (7, .fixed32(5)),
@@ -795,12 +828,89 @@ enum SyncDiff {
         if let problem = try rebroadcastCheck(profile: profile, psk: psk) { return problem }
         if let problem = try gatewayCheck(profile: profile, psk: psk) { return problem }
         if let problem = try rebroadcastModeCheck(psk: psk) { return problem }
+        if let problem = try secondaryChannelCheck(psk: psk) { return problem }
         if let problem = try relayCheck(profile: profile, psk: psk, role: .router, wire: 2, label: "ROUTER", tag: "router") {
             return problem
         }
         if let problem = try relayCheck(profile: profile, psk: psk, role: .clientBase, wire: 12, label: "CLIENT_BASE", tag: "client-base") {
             return problem
         }
+        return nil
+    }
+
+    /// A radio that matches the profile but has SECONDARY channels at 1 and 3 (and a DISABLED slot 2)
+    /// gets exactly one DISABLED `set_channel` per enabled secondary, and nothing on the next pass.
+    private static func secondaryChannelCheck(psk: Data) throws -> String? {
+        let profile = BuiltInProfiles.takTracker()
+        func slot(_ index: Int, _ role: UInt64, _ name: String) -> Data {
+            PhoneAPICodec.serialize([
+                PhoneAPICodec.Field(number: 1, value: .varint(UInt64(index))),
+                PhoneAPICodec.Field(number: 2, value: .bytes(PhoneAPICodec.serialize([
+                    PhoneAPICodec.Field(number: 2, value: .bytes(Data(repeating: 0x33, count: 16))),
+                    PhoneAPICodec.Field(number: 3, value: .bytes(Data(name.utf8))),
+                ]))),
+                PhoneAPICodec.Field(number: 3, value: .varint(role)),
+            ])
+        }
+        let primary = try PhoneAPICodec.channelMessage(
+            name: profile.channel.name,
+            psk: psk,
+            uplink: true,
+            downlink: true,
+            preciseLocation: true,
+            channelID: 0x11223344
+        )
+        let radio = RadioInventory(
+            lora: try PhoneAPICodec.loraConfig(merging: Data(), settings: profile.lora),
+            device: try PhoneAPICodec.deviceConfig(merging: Data(), role: .takTracker, settings: profile.device),
+            position: try PhoneAPICodec.positionConfig(merging: Data(), settings: profile.position),
+            display: try PhoneAPICodec.displayConfig(merging: Data(), settings: profile.display),
+            owner: try PhoneAPICodec.userMessage(merging: Data(), longName: "Tracker", shortName: "Trk"),
+            longName: "Tracker",
+            shortName: "Trk",
+            channels: [primary, slot(1, 2, "MCSC"), slot(2, 0, "Old"), slot(3, 2, "")],
+            observedConfigFields: [1, 2, 5, 6],
+            observedModuleFields: []
+        )
+        func plan(_ inventory: RadioInventory) throws -> SyncPlan {
+            try SyncDiff.plan(
+                inventory: inventory,
+                profile: profile,
+                role: .takTracker,
+                names: RadioNames(longName: nil, shortName: nil),
+                longEdited: false,
+                shortEdited: false,
+                psk: psk,
+                function: .tracker,
+                wifiSSID: "",
+                wifiPSK: Data(),
+                mqttPassword: Data()
+            )
+        }
+        guard try PhoneAPICodec.snapshot(inventory: radio).enabledSecondaryChannelIndexes == [1, 3] else {
+            return "secondary-snapshot"
+        }
+        let first = try plan(radio)
+        guard first.changes.map(\.id) == ["channel.secondary.1", "channel.secondary.3"] else { return "secondary-ids" }
+        guard first.changes.first?.detail == "Remove secondary channel \"MCSC\" (index 1)",
+              first.changes.last?.detail == "Remove secondary channel \"unnamed\" (index 3)" else {
+            return "secondary-detail"
+        }
+        guard first.writes == [
+            .channel(PhoneAPICodec.disabledChannel(index: 1)),
+            .channel(PhoneAPICodec.disabledChannel(index: 3)),
+        ] else { return "secondary-writes" }
+        // Index 1, role DISABLED (explicit 0), no settings: no name or PSK.
+        guard PhoneAPICodec.disabledChannel(index: 1) == Data([0x08, 0x01, 0x18, 0x00]) else { return "secondary-body" }
+        // Diff detail rows never carry key bytes.
+        guard !first.changes.contains(where: { $0.detail.contains("3333") }) else { return "secondary-secret" }
+        let cleared = try radio.applying(first.writes)
+        guard cleared.channels.count == 4 else { return "secondary-apply" }
+        guard try PhoneAPICodec.snapshot(inventory: cleared).enabledSecondaryChannelIndexes == [] else {
+            return "secondary-verify"
+        }
+        let again = try plan(cleared)
+        guard again.changes.isEmpty, again.writes.isEmpty else { return "secondary-second" }
         return nil
     }
 
