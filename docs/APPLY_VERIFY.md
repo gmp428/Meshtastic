@@ -63,7 +63,7 @@ Rewriting a section that already matches is what rebooted the radio once per sec
 - `tx_enabled = true`
 - `ignore_mqtt = false`
 - `config_ok_to_mqtt = true` (required, or a gateway drops the packet)
-- `channel_num` / frequency slot = profile (`50` for TAK ShortTurbo)
+- `channel_num` / frequency slot = profile (`50` for the TAK template)
 - region = profile region (US default)
 
 ### Device (`Config.Device`)
@@ -117,7 +117,7 @@ Sections the profile does not own (power, Bluetooth, security, module configs ot
 
 After channel Send, read back and require **all** TAK checks green:
 
-1. LoRa ShortTurbo  
+1. LoRa preset matches the profile  
 2. Ignore MQTT off  
 3. Ok to MQTT on  
 4. Hop limit is 3  

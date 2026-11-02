@@ -263,6 +263,30 @@ enum SyncDiff {
             fields: positionFields,
             desired: profile.position.smartPosition
         )
+        noteExact(
+            &positionChanges,
+            id: "position.broadcastSecs",
+            title: "Position broadcast interval",
+            radio: PhoneAPICodec.numeric(positionFields, 1),
+            desired: UInt64(profile.position.broadcastSecs),
+            label: { "\($0) s" }
+        )
+        noteExact(
+            &positionChanges,
+            id: "position.smartDistance",
+            title: "Smart position minimum distance",
+            radio: PhoneAPICodec.numeric(positionFields, 10),
+            desired: UInt64(profile.position.smartMinimumDistance),
+            label: { "\($0) m" }
+        )
+        noteExact(
+            &positionChanges,
+            id: "position.smartInterval",
+            title: "Smart position minimum interval",
+            radio: PhoneAPICodec.numeric(positionFields, 11),
+            desired: UInt64(profile.position.smartMinimumIntervalSecs),
+            label: { "\($0) s" }
+        )
         let flags = UInt32(truncatingIfNeeded: PhoneAPICodec.numeric(positionFields, 7))
         noteBit(&positionChanges, id: "position.altitude", title: "Altitude", flags: flags, bit: PhoneAPICodec.altitudeBit, desired: profile.position.flags.altitude)
         noteBit(&positionChanges, id: "position.altitudeMSL", title: "Altitude MSL", flags: flags, bit: PhoneAPICodec.altitudeMSLBit, desired: profile.position.flags.altitudeMSL)
@@ -538,21 +562,12 @@ enum SyncDiff {
     }
 
     private static func modemValue(_ preset: ModemPreset) -> UInt64 {
-        switch preset {
-        case .longFast: return 0
-        case .mediumFast: return 4
-        case .shortTurbo: return 8
-        }
+        PhoneAPICodec.modemPresetValue(preset)
     }
 
     private static func modemLabel(_ value: UInt64) -> String {
-        switch value {
-        case 0: return "LONG_FAST"
-        case 4: return "MEDIUM_FAST"
-        case 6: return "SHORT_FAST"
-        case 8: return "SHORT_TURBO"
-        default: return String(value)
-        }
+        if value == 2 { return "VERY_LONG_SLOW" }
+        return PhoneAPICodec.modemPreset(value)?.rawValue ?? String(value)
     }
 
     private static func regionValue(_ region: LoRaRegion) -> UInt64 {
@@ -609,6 +624,9 @@ enum SyncDiff {
         var profile = BuiltInProfiles.takTracker()
         guard profile.device.rebroadcastMode == .localOnly else { return "rebroadcast-default" }
         profile.device.rebroadcastMode = .all
+        // New profiles default to MEDIUM_FAST. This fixture radio is on SHORT_TURBO (8), so pin that here.
+        guard profile.lora.modemPreset == .mediumFast else { return "preset-default" }
+        profile.lora.modemPreset = .shortTurbo
         // 0x5A repeated is an encoder fixture, not a fleet key. Do not print it.
         let psk = Data(repeating: 0x5A, count: 32)
         let zone = Data((profile.device.timezone ?? "").utf8)
@@ -631,8 +649,10 @@ enum SyncDiff {
                 (1, .varint(10)),
             ]),
             position: RawProto.message([
-                (1, .varint(900)),
+                (1, .varint(60)),
+                (11, .varint(15)),
                 (13, .varint(1)),
+                (10, .varint(10)),
                 (7, .fixed32(5)),
                 (4, .varint(0)),
                 (2, .varint(1)),

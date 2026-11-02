@@ -16,8 +16,12 @@ struct ProfileEditorView: View {
                     .textInputAutocapitalization(.words)
             }
             Section("LoRa") {
-                LabeledContent("Preset", value: profile.lora.modemPreset.displayName)
-                Text("ShortTurbo is locked for the TAK template.")
+                Picker("Preset", selection: $profile.lora.modemPreset) {
+                    ForEach(ModemPreset.pickerChoices(current: profile.lora.modemPreset), id: \.self) { preset in
+                        Text(preset.displayName).tag(preset)
+                    }
+                }
+                Text("Every radio in this fleet must use the same preset. Changing it means re-applying every radio.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Stepper(value: $profile.lora.frequencySlot, in: UInt32(1)...UInt32(100)) {
@@ -82,6 +86,20 @@ struct ProfileEditorView: View {
             }
             Section("Position") {
                 Toggle("Smart Position", isOn: $profile.position.smartPosition)
+                Stepper(value: $profile.position.smartMinimumDistance, in: UInt32(0)...UInt32(10_000), step: 5) {
+                    Text("Smart minimum distance \(profile.position.smartMinimumDistance) m")
+                }
+                .disabled(!profile.position.smartPosition)
+                Stepper(value: $profile.position.smartMinimumIntervalSecs, in: UInt32(0)...UInt32(86_400), step: 5) {
+                    Text("Smart minimum interval \(profile.position.smartMinimumIntervalSecs) s")
+                }
+                .disabled(!profile.position.smartPosition)
+                Stepper(value: $profile.position.broadcastSecs, in: UInt32(0)...UInt32(86_400), step: 15) {
+                    Text("Broadcast interval \(profile.position.broadcastSecs) s")
+                }
+                Text("Written in the one position config write. 0 lets the firmware use its own default.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 LabeledContent("Altitude", value: "HAE (ALTITUDE, not MSL)")
                 Toggle("Geoidal separation", isOn: $profile.position.flags.geoidalSeparation)
                 LabeledContent("GPS", value: profile.position.gpsMode.rawValue)

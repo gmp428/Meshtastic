@@ -126,7 +126,10 @@ final class SimulatedMeshtasticTransport: FleetRadioTransport {
             settings: PositionSettings(
                 smartPosition: false,
                 flags: PositionFlagSet(altitude: false, altitudeMSL: true, geoidalSeparation: false),
-                gpsMode: .enabled
+                gpsMode: .enabled,
+                smartMinimumDistance: 100,
+                smartMinimumIntervalSecs: 30,
+                broadcastSecs: 900
             )
         )
         let display = try! PhoneAPICodec.displayConfig(

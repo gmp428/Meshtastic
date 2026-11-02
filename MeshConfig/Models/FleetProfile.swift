@@ -27,13 +27,14 @@ struct FleetProfile: Identifiable, Codable, Hashable, Sendable {
 }
 
 extension FleetProfile {
-    /// TAK template locks. Slot, region, channel name, MQTT address, Wi-Fi SSID,
-    /// smart position, geoidal separation, units, notes, rebroadcast mode, and the default role stay editable.
+    /// TAK template locks. Modem preset, slot, region, channel name, MQTT address, Wi-Fi SSID,
+    /// smart position and its distance/interval, position broadcast interval, geoidal separation, units,
+    /// notes, rebroadcast mode, and the default role stay editable.
     /// Altitude is always the HAE path: ALTITUDE on, ALTITUDE_MSL off.
     /// Ignore MQTT stays off and Ok to MQTT stays on so a gateway will upload the fleet.
     mutating func applyTAKTemplateLocks() {
         lora.usePreset = true
-        lora.modemPreset = .shortTurbo
+        // The modem preset is a per-profile choice. A saved profile keeps the preset it decoded.
         lora.ignoreMQTT = false
         lora.configOkToMQTT = true
         lora.hopLimit = 3
@@ -155,17 +156,54 @@ extension LoRaSettings: Codable {
     }
 }
 
+/// Meshtastic `Config.LoRaConfig.ModemPreset` (protobufs ad0bf31). VERY_LONG_SLOW (2) is deprecated
+/// and not modeled. LONG_SLOW (1) is deprecated in 2.7; it is decoded but only offered when already chosen.
+/// Every radio in a fleet must use the same preset or they will not hear each other.
 enum ModemPreset: String, Codable, CaseIterable, Sendable {
-    case shortTurbo = "SHORT_TURBO"   // protobuf = 8
-    case mediumFast = "MEDIUM_FAST"
-    case longFast = "LONG_FAST"       // not for TAK/ATAK bandwidth
+    case longFast = "LONG_FAST"         // 0
+    case longSlow = "LONG_SLOW"         // 1 (deprecated in 2.7)
+    case mediumSlow = "MEDIUM_SLOW"     // 3
+    case mediumFast = "MEDIUM_FAST"     // 4
+    case shortSlow = "SHORT_SLOW"       // 5
+    case shortFast = "SHORT_FAST"       // 6
+    case longModerate = "LONG_MODERATE" // 7
+    case shortTurbo = "SHORT_TURBO"     // 8
+    case longTurbo = "LONG_TURBO"       // 9
+    case liteFast = "LITE_FAST"         // 10
+    case liteSlow = "LITE_SLOW"         // 11
+    case narrowFast = "NARROW_FAST"     // 12
+    case narrowSlow = "NARROW_SLOW"     // 13
+    case tinyFast = "TINY_FAST"         // 14
+    case tinySlow = "TINY_SLOW"         // 15
+    case mediumTurbo = "MEDIUM_TURBO"   // 16
 
+    /// Labels from the proto `enum_value_metadata`.
     var displayName: String {
         switch self {
+        case .longFast: return "Long Range - Fast"
+        case .longSlow: return "Long Range - Slow (deprecated)"
+        case .mediumSlow: return "Medium Range - Slow"
+        case .mediumFast: return "Medium Range - Fast"
+        case .shortSlow: return "Short Range - Slow"
+        case .shortFast: return "Short Range - Fast"
+        case .longModerate: return "Long Range - Moderate"
         case .shortTurbo: return "Short Range - Turbo"
-        case .mediumFast: return "Medium Fast"
-        case .longFast: return "Long Fast"
+        case .longTurbo: return "Long Range - Turbo"
+        case .liteFast: return "Lite - Fast"
+        case .liteSlow: return "Lite - Slow"
+        case .narrowFast: return "Narrow - Fast"
+        case .narrowSlow: return "Narrow - Slow"
+        case .tinyFast: return "Tiny - Fast"
+        case .tinySlow: return "Tiny - Slow"
+        case .mediumTurbo: return "Medium Range - Turbo"
         }
+    }
+
+    var isDeprecated: Bool { self == .longSlow }
+
+    /// Picker choices: every non-deprecated preset, plus `current` if a saved profile already uses a deprecated one.
+    static func pickerChoices(current: ModemPreset) -> [ModemPreset] {
+        allCases.filter { !$0.isDeprecated || $0 == current }
     }
 }
 
@@ -398,11 +436,52 @@ enum RebroadcastMode: String, Codable, CaseIterable, Sendable {
 
 // MARK: - Position (Config.Position)
 
-struct PositionSettings: Codable, Hashable, Sendable {
+struct PositionSettings: Hashable, Sendable {
+    /// Meshtastic `position_broadcast_smart_enabled` (field 2).
     var smartPosition: Bool
     /// Bitfield intent; apply layer ORs protobuf PositionFlags.
     var flags: PositionFlagSet
     var gpsMode: GPSMode
+    /// Meshtastic `broadcast_smart_minimum_distance` (field 10), meters.
+    var smartMinimumDistance: UInt32 = PositionSettings.defaultSmartMinimumDistance
+    /// Meshtastic `broadcast_smart_minimum_interval_secs` (field 11).
+    var smartMinimumIntervalSecs: UInt32 = PositionSettings.defaultSmartMinimumIntervalSecs
+    /// Meshtastic `position_broadcast_secs` (field 1).
+    var broadcastSecs: UInt32 = PositionSettings.defaultBroadcastSecs
+
+    static let defaultSmartMinimumDistance: UInt32 = 10
+    static let defaultSmartMinimumIntervalSecs: UInt32 = 15
+    static let defaultBroadcastSecs: UInt32 = 60
+}
+
+extension PositionSettings: Codable {
+    enum CodingKeys: String, CodingKey {
+        case smartPosition, flags, gpsMode, smartMinimumDistance, smartMinimumIntervalSecs, broadcastSecs
+    }
+
+    /// Profiles saved before these fields existed load with the tracker defaults.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        smartPosition = try container.decodeIfPresent(Bool.self, forKey: .smartPosition) ?? true
+        flags = try container.decode(PositionFlagSet.self, forKey: .flags)
+        gpsMode = try container.decode(GPSMode.self, forKey: .gpsMode)
+        smartMinimumDistance = try container.decodeIfPresent(UInt32.self, forKey: .smartMinimumDistance)
+            ?? PositionSettings.defaultSmartMinimumDistance
+        smartMinimumIntervalSecs = try container.decodeIfPresent(UInt32.self, forKey: .smartMinimumIntervalSecs)
+            ?? PositionSettings.defaultSmartMinimumIntervalSecs
+        broadcastSecs = try container.decodeIfPresent(UInt32.self, forKey: .broadcastSecs)
+            ?? PositionSettings.defaultBroadcastSecs
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(smartPosition, forKey: .smartPosition)
+        try container.encode(flags, forKey: .flags)
+        try container.encode(gpsMode, forKey: .gpsMode)
+        try container.encode(smartMinimumDistance, forKey: .smartMinimumDistance)
+        try container.encode(smartMinimumIntervalSecs, forKey: .smartMinimumIntervalSecs)
+        try container.encode(broadcastSecs, forKey: .broadcastSecs)
+    }
 }
 
 struct PositionFlagSet: Codable, Hashable, Sendable {
@@ -464,12 +543,12 @@ enum BuiltInProfiles {
         return FleetProfile(
             id: UUID(),
             name: name,
-            notes: "ShortTurbo ATAK mesh. One generated AES-256 PSK in Keychain per profile. Trackers and the gateway share the channel. The gateway Wi-Fi and MQTT passwords stay in the Keychain.",
+            notes: "ATAK mesh. Pick one modem preset for the whole fleet (Medium Range - Fast by default). One generated AES-256 PSK in Keychain per profile. Trackers and the gateway share the channel. The gateway Wi-Fi and MQTT passwords stay in the Keychain.",
             createdAt: now,
             updatedAt: now,
             lora: LoRaSettings(
                 usePreset: true,
-                modemPreset: .shortTurbo,
+                modemPreset: .mediumFast,
                 ignoreMQTT: false,
                 frequencySlot: 50,
                 region: region
@@ -494,7 +573,10 @@ enum BuiltInProfiles {
                     altitudeMSL: false,
                     geoidalSeparation: true
                 ),
-                gpsMode: .enabled
+                gpsMode: .enabled,
+                smartMinimumDistance: PositionSettings.defaultSmartMinimumDistance,
+                smartMinimumIntervalSecs: PositionSettings.defaultSmartMinimumIntervalSecs,
+                broadcastSecs: PositionSettings.defaultBroadcastSecs
             ),
             display: DisplaySettings(units: displayUnits),
             defaultRole: .takTracker
@@ -540,6 +622,9 @@ struct DeviceSnapshot: Sendable {
     var rebroadcastMode: RebroadcastMode?
     var smartPosition: Bool?
     var positionFlags: PositionFlagSet?
+    var smartMinimumDistance: UInt32?
+    var smartMinimumIntervalSecs: UInt32?
+    var positionBroadcastSecs: UInt32?
     /// Meshtastic `User.long_name` read back from the radio.
     var longName: String?
     var wifiEnabled: Bool?
@@ -569,7 +654,7 @@ struct VerifyCheckResult: Identifiable, Equatable, Sendable {
 
 enum ProfileAcceptance {
     static let takChecks: [(id: String, label: String)] = [
-        ("lora.preset", "LoRa preset is ShortTurbo"),
+        ("lora.preset", "LoRa preset matches the profile"),
         ("lora.mqtt", "Ignore MQTT is off"),
         ("lora.okToMqtt", "Ok to MQTT is on"),
         ("lora.hop", "Hop limit is 3"),
@@ -584,6 +669,9 @@ enum ProfileAcceptance {
         ("owner.longName", "Long name matches when a new callsign was written"),
         ("dev.rebroadcast", "Rebroadcast mode matches the profile"),
         ("pos.smart", "Smart Position matches profile (on for ops)"),
+        ("pos.smartDistance", "Smart Position minimum distance matches profile"),
+        ("pos.smartInterval", "Smart Position minimum interval matches profile"),
+        ("pos.broadcastSecs", "Position broadcast interval matches profile"),
         ("pos.hae", "Position flags: ALTITUDE on, ALTITUDE_MSL off"),
         ("pos.geoid", "GEOIDAL_SEPARATION on when profile requests it"),
     ]
@@ -599,7 +687,11 @@ enum ProfileAcceptance {
         mqttPassword: Data
     ) -> [VerifyCheckResult] {
         var rows = [
-            VerifyCheckResult(id: "lora.preset", label: "LoRa preset is ShortTurbo", ok: snap.modemPreset == .shortTurbo),
+            VerifyCheckResult(
+                id: "lora.preset",
+                label: "LoRa preset is \(profile.lora.modemPreset.displayName)",
+                ok: snap.modemPreset == profile.lora.modemPreset
+            ),
             VerifyCheckResult(id: "lora.mqtt", label: "Ignore MQTT is off", ok: snap.ignoreMQTT == false),
             VerifyCheckResult(id: "lora.okToMqtt", label: "Ok to MQTT is on", ok: snap.configOkToMQTT == true),
             VerifyCheckResult(id: "lora.hop", label: "Hop limit is 3", ok: snap.hopLimit == profile.lora.hopLimit),
@@ -627,6 +719,21 @@ enum ProfileAcceptance {
                 ok: snap.rebroadcastMode == profile.device.rebroadcastMode
             ),
             VerifyCheckResult(id: "pos.smart", label: "Smart Position matches profile", ok: snap.smartPosition == profile.position.smartPosition),
+            VerifyCheckResult(
+                id: "pos.smartDistance",
+                label: "Smart Position minimum distance is \(profile.position.smartMinimumDistance) m",
+                ok: snap.smartMinimumDistance == profile.position.smartMinimumDistance
+            ),
+            VerifyCheckResult(
+                id: "pos.smartInterval",
+                label: "Smart Position minimum interval is \(profile.position.smartMinimumIntervalSecs) s",
+                ok: snap.smartMinimumIntervalSecs == profile.position.smartMinimumIntervalSecs
+            ),
+            VerifyCheckResult(
+                id: "pos.broadcastSecs",
+                label: "Position broadcast interval is \(profile.position.broadcastSecs) s",
+                ok: snap.positionBroadcastSecs == profile.position.broadcastSecs
+            ),
             VerifyCheckResult(id: "pos.hae", label: "Altitude is HAE path (not MSL)", ok: snap.positionFlags?.isTAKAltitudeCorrect == true),
             VerifyCheckResult(id: "pos.geoid", label: "Geoidal separation matches profile", ok: snap.positionFlags?.geoidalSeparation == profile.position.flags.geoidalSeparation),
         ]

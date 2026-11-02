@@ -2,7 +2,7 @@
 
 iPhone app for configuring a Meshtastic fleet one radio at a time over Bluetooth. You save a fleet profile on the phone, pick a role for the radio in front of you, apply the whole profile, verify the read-back, disconnect, then move to the next radio.
 
-The primary profile is the TAK tracker / ATAK-over-Meshtastic setup: ShortTurbo, Ignore MQTT off, Ok to MQTT on, hop limit 3, transmit on, frequency slot 50, a private primary channel with uplink and downlink, a fleet rebroadcast mode (new profiles default to LOCAL_ONLY), and position flags that give TAK height above ellipsoid (HAE) rather than mean sea level. Each radio is a Tracker or a Gateway. Trackers keep the MQTT module off. The gateway is a CLIENT that joins Wi-Fi and publishes the fleet to OpenTAKServer.
+The primary profile is the TAK tracker / ATAK-over-Meshtastic setup: a per-profile LoRa modem preset (new profiles default to MEDIUM_FAST; saved profiles keep theirs), Ignore MQTT off, Ok to MQTT on, hop limit 3, transmit on, frequency slot 50, a private primary channel with uplink and downlink, Smart Position with editable minimum distance (10 m) and interval (15 s), a position broadcast interval (60 s), a fleet rebroadcast mode (new profiles default to LOCAL_ONLY), and position flags that give TAK height above ellipsoid (HAE) rather than mean sea level. Each radio is a Tracker or a Gateway. Trackers keep the MQTT module off. The gateway is a CLIENT that joins Wi-Fi and publishes the fleet to OpenTAKServer.
 
 This repository is the Mesh Config app. It is not the Meshtastic firmware tree.
 
@@ -92,7 +92,7 @@ Power, Bluetooth, security, and module configs other than MQTT are read during t
 
 Full checklist and timeouts: [docs/APPLY_VERIFY.md](docs/APPLY_VERIFY.md). Screen contract: [docs/SCREENS_UX.md](docs/SCREENS_UX.md).
 
-Profiles and the device roster are JSON files under Application Support (`fleet-profiles.json`, `configured-devices.json`). Saving a profile strips any exportable key field and locks the TAK template invariants (ShortTurbo, Ignore MQTT off, Ok to MQTT on, hop limit 3, transmit on, uplink and downlink, HAE altitude, precise location, replace default primary). Rebroadcast mode is a profile setting: ALL, LOCAL_ONLY (default for new profiles), or KNOWN_ONLY. A saved profile without the field loads as ALL, the radio default, so an existing fleet does not change until you pick a mode. CORE_PORTNUMS_ONLY is never offered because it drops ATAK_PLUGIN (port 72). NONE is not offered and falls back to ALL. Empty MQTT address, username, or root are filled with the OpenTAKServer defaults (`mcsctak.duckdns.org:8883`, `meshgw`, `opentakserver`).
+Profiles and the device roster are JSON files under Application Support (`fleet-profiles.json`, `configured-devices.json`). Saving a profile strips any exportable key field and locks the TAK template invariants (use preset on, Ignore MQTT off, Ok to MQTT on, hop limit 3, transmit on, uplink and downlink, HAE altitude, precise location, replace default primary). Rebroadcast mode is a profile setting: ALL, LOCAL_ONLY (default for new profiles), or KNOWN_ONLY. A saved profile without the field loads as ALL, the radio default, so an existing fleet does not change until you pick a mode. CORE_PORTNUMS_ONLY is never offered because it drops ATAK_PLUGIN (port 72). NONE is not offered and falls back to ALL. Empty MQTT address, username, or root are filled with the OpenTAKServer defaults (`mcsctak.duckdns.org:8883`, `meshgw`, `opentakserver`).
 
 ## Radios
 

@@ -286,7 +286,11 @@ enum PhoneAPICodec {
 
     static func positionConfig(merging existing: Data, settings: PositionSettings) throws -> Data {
         var fields = try parse(existing)
+        // One position set_config carries every position field. Field numbers from protobufs ad0bf31.
+        upsertVarint(&fields, 1, UInt64(settings.broadcastSecs))
         upsertVarint(&fields, 2, settings.smartPosition ? 1 : 0)
+        upsertVarint(&fields, 10, UInt64(settings.smartMinimumDistance))
+        upsertVarint(&fields, 11, UInt64(settings.smartMinimumIntervalSecs))
         var flags = UInt32(truncatingIfNeeded: numeric(fields, 7))
         setBit(&flags, altitudeBit, settings.flags.altitude)
         setBit(&flags, altitudeMSLBit, settings.flags.altitudeMSL)
@@ -508,6 +512,9 @@ enum PhoneAPICodec {
             rebroadcastMode: rebroadcast,
             smartPosition: numeric(positionFields, 2) != 0,
             positionFlags: flags,
+            smartMinimumDistance: UInt32(truncatingIfNeeded: numeric(positionFields, 10)),
+            smartMinimumIntervalSecs: UInt32(truncatingIfNeeded: numeric(positionFields, 11)),
+            positionBroadcastSecs: UInt32(truncatingIfNeeded: numeric(positionFields, 1)),
             longName: try longName(from: owner),
             wifiEnabled: numeric(networkFields, 1) != 0,
             wifiSSID: textValue(networkFields, 3),
@@ -599,7 +606,7 @@ enum PhoneAPICodec {
             gpsMode: .enabled
         )
         guard try encodeMatches(
-            "088407100138056801",
+            "083c10013805500a580f6801",
             positionConfig(merging: positionBase, settings: position)
         ) else { return false }
 
@@ -894,19 +901,47 @@ enum PhoneAPICodec {
         return nil
     }
 
-    private static func modemPresetValue(_ preset: ModemPreset) -> UInt64 {
+    /// `Config.LoRaConfig.ModemPreset` values from protobufs ad0bf31.
+    static func modemPresetValue(_ preset: ModemPreset) -> UInt64 {
         switch preset {
         case .longFast: return 0
+        case .longSlow: return 1
+        case .mediumSlow: return 3
         case .mediumFast: return 4
+        case .shortSlow: return 5
+        case .shortFast: return 6
+        case .longModerate: return 7
         case .shortTurbo: return 8
+        case .longTurbo: return 9
+        case .liteFast: return 10
+        case .liteSlow: return 11
+        case .narrowFast: return 12
+        case .narrowSlow: return 13
+        case .tinyFast: return 14
+        case .tinySlow: return 15
+        case .mediumTurbo: return 16
         }
     }
 
-    private static func modemPreset(_ value: UInt64) -> ModemPreset? {
+    /// VERY_LONG_SLOW (2) and unknown values decode as nil, so Verify fails instead of guessing.
+    static func modemPreset(_ value: UInt64) -> ModemPreset? {
         switch value {
         case 0: return .longFast
+        case 1: return .longSlow
+        case 3: return .mediumSlow
         case 4: return .mediumFast
+        case 5: return .shortSlow
+        case 6: return .shortFast
+        case 7: return .longModerate
         case 8: return .shortTurbo
+        case 9: return .longTurbo
+        case 10: return .liteFast
+        case 11: return .liteSlow
+        case 12: return .narrowFast
+        case 13: return .narrowSlow
+        case 14: return .tinyFast
+        case 15: return .tinySlow
+        case 16: return .mediumTurbo
         default: return nil
         }
     }

@@ -21,7 +21,7 @@ Apply is the primary path in the field. Profiles is for prep.
 
 | Element | Behavior |
 | --- | --- |
-| Row | Name, subtitle “ShortTurbo · slot 50 · TAK Tracker default”, trailing chevron |
+| Row | Name, subtitle “Medium Range - Fast · slot 50 · TAK Tracker default”, trailing chevron |
 | Swipe | Duplicate; Delete (also deletes Keychain PSK for that profile id) |
 | FAB / toolbar + | New profile (starts as copy of TAK defaults) |
 | Empty | “Create TAK Tracker profile” primary button → `BuiltInProfiles.takTracker()` + `ensurePSK` |
@@ -39,7 +39,7 @@ Sections matching the model: LoRa, Channel, Device defaults, Position, Display, 
 | Name | Text |
 | Channel name | Text (warn if LongFast/ShortFast) |
 | PSK | Status only: “Key in Keychain” / “Will generate on save”. Buttons: **Generate if missing**, **Rotate** (confirm: “All radios need re-apply”) |
-| LoRa preset | Locked ShortTurbo on TAK template (advanced unlock later) |
+| LoRa preset | Picker of all Meshtastic presets (default Medium Range - Fast); same on every radio |
 | Slot | Stepper/number, default 50 |
 | Ignore MQTT | Locked Off |
 | Ok to MQTT | Locked On |
